@@ -5,7 +5,13 @@
 
 # Where the service repos live on your work machine (they should be siblings).
 roots:
-  - ~/work/oms
+  - /projects/ong        # ONG (OMS) — ~4-5 repos
+
+# Note: /projects/ong holds only part of the estate. The OMS spans 15+ services,
+# so expect edges pointing at services whose repos are NOT under this root.
+# Record those as external nodes rather than dropping them — an edge to a repo
+# you can't read is still a real dependency, and knowing it exists is the point.
+# Add more roots here as you get access to them.
 
 # History window for git-ownership analysis.
 defaults:

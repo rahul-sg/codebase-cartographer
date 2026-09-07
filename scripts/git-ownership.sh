@@ -42,7 +42,7 @@ echo
 
 echo "## Primary author per hot directory"
 echo "# who to ask, and who to tag on a PR"
-git -C "$REPO" log --since="$SINCE" --name-only --format='@%aN' \
+git -C "$REPO" log --since="$SINCE" --name-only --format=format:'@%aN' \
   | awk '
       /^@/ { author = substr($0,2); next }
       NF   { n = split($0, p, "/")
@@ -62,7 +62,7 @@ echo
 
 echo "## Files that change together"
 echo "# strong co-change across repos usually means a hidden coupling"
-git -C "$REPO" log --since="$SINCE" --name-only --format='---' \
+git -C "$REPO" log --since="$SINCE" --name-only --format=format:--- \
   | awk '
       /^---$/ { if (n > 1 && n <= 20)
                   for (i = 1; i < n; i++)
