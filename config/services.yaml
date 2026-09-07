@@ -1,0 +1,38 @@
+# services.yaml — the service inventory. Fill this in first; everything reads it.
+#
+# Fill it incrementally. Five accurate entries beat fifteen guessed ones.
+# `/cartographer:topology` will help you populate it by scanning your repo root.
+
+# Where the service repos live on your work machine (they should be siblings).
+roots:
+  - ~/work/oms
+
+# History window for git-ownership analysis.
+defaults:
+  history_months: 12
+
+services:
+  # - name: order-service              # canonical name; list aliases you see in code
+  #   repo: ~/work/oms/order-service
+  #   language: java
+  #   purpose: Owns order lifecycle from submission through fulfillment.
+  #   owns_data: [orders, order_lines]
+  #   aliases: [orders, OrderService, ORDER_SVC]
+  #   team: ""                         # fill in as you learn it
+  #   notes: ""
+
+# ---------------------------------------------------------------------------
+# Anything below is optional and gets filled in as you learn the system.
+# ---------------------------------------------------------------------------
+
+# Journeys worth tracing end to end, in rough priority order.
+# `/cartographer:trace-flow <name>` consumes these.
+flows:
+  - buyer submits an order
+  - order cancellation
+  - order fulfillment and shipment
+  # - invoice generation
+  # - catalog / price list sync
+
+# Terms you keep hearing and are not yet sure about. Feeds docs/GLOSSARY.md.
+glossary_todo: []

@@ -1,0 +1,12 @@
+# Generated maps contain real details about internal systems.
+# Keep the tooling portable; keep the output inside the work environment.
+context/
+docs/services/
+docs/flows/
+docs/TOPOLOGY.md
+docs/AI_SURFACE.md
+docs/GLOSSARY.md
+journal/
+
+.DS_Store
+*.log

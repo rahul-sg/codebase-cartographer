@@ -1,0 +1,49 @@
+# <service-name>
+
+<!--
+  Drop this at the root of a service repo. Claude Code auto-loads it in every
+  session opened in this directory, so a new session starts oriented instead of
+  rediscovering the layout each time.
+
+  Keep it SHORT. This is loaded into context on every single turn — every line
+  costs. If it grows past a page, move the detail into docs/services/<name>.md
+  and link to it instead.
+
+  Check with your team before committing this to a shared repo.
+-->
+
+## What this is
+
+One or two sentences.
+
+## Layout
+
+Where the code that matters actually lives — only the paths a newcomer would
+waste time hunting for.
+
+- `path/to/handlers/` — HTTP entry points
+- `path/to/domain/` — core types and business rules
+- `path/to/clients/` — outbound calls to other services
+
+## Talks to
+
+- **<service>** — why, and by what mechanism
+- **<topic>** — produced / consumed
+
+## Conventions
+
+Anything non-obvious about how code here is written, tested, or structured that
+differs from the rest of the estate.
+
+## Watch out for
+
+The traps. Misleading names, required-but-undocumented setup, the module that
+looks dead but isn't.
+
+## Commands
+
+```bash
+# build:
+# test:
+# run locally:
+```

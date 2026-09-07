@@ -1,0 +1,8 @@
+{
+  "name": "cartographer",
+  "description": "Maps a large multi-service codebase: cross-service topology, per-service briefs, end-to-end flow traces, AI/ML integration surface, and a ramp-up question journal.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Rahul Sengupta"
+  }
+}
