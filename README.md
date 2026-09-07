@@ -17,13 +17,51 @@ leaves the machine.
 | `/cartographer:map-service <name>` | Deep brief on one service: entry points, owned data, invariants, gotchas, who maintains it. |
 | `/cartographer:trace-flow <journey>` | Follow one entity end to end across every service it touches. |
 | `/cartographer:ai-surface` | Where AI/ML already lives, where it could go, and what the constraints are. |
+| `/cartographer:impact <symbol>` | Blast radius across both layers — what breaks, which services, who to tag. |
 | `/cartographer:journal [question]` | Log a ramp-up question, or batch-answer the backlog against the code. |
 
 Plus a read-only `cartographer-service-explorer` subagent for parallel fan-out
-across repos, and two dependency-free shell scripts:
+across repos, and three dependency-free scripts:
 
 - `scripts/git-ownership.sh` — who maintains what, what churns, what's stale, what changes together
 - `scripts/topology-scan.sh` — raw evidence of service-to-service edges
+- `scripts/symbol_graph.py` — intra-repo symbol graph (classes, functions, imports, calls)
+
+## Two layers
+
+| Layer | Maps | Built by |
+| --- | --- | --- |
+| **Symbol** | functions, classes, `calls` / `imports` / `extends` — inside a repo | `symbol_graph.py`, or [Graphify](https://github.com/Graphify-Labs/graphify) |
+| **Service** | who calls whom across processes, events, owned data | `/cartographer:topology` |
+
+The layers are joined: every symbol node carries the service it belongs to, so
+`/cartographer:impact` can follow a change from a method through its repo and
+out across a service boundary.
+
+**Why both.** No AST crosses a process boundary. A symbol graph of `order-svc`
+will never show that it calls `pricing-svc`, because that edge exists only as
+the string `PRICING_SERVICE_URL` in a config file. Conversely the service map
+knows nothing about functions. Each layer is blind exactly where the other sees.
+
+### On Graphify
+
+If you can get [Graphify](https://github.com/Graphify-Labs/graphify) approved,
+use it for the symbol layer — it does tree-sitter parsing across ~37 grammars
+and will beat `symbol_graph.py` comfortably. Its code path is local and
+LLM-free (the API-key backends are only for docs/PDF/image extraction, which
+you can skip). Note that `graphify install` writes `~/.claude/skills/graphify/`,
+appends to `~/.claude/CLAUDE.md`, and installs `PreToolUse` hooks — additive,
+but worth knowing before you run it, and worth raising with your security team
+as a third-party dependency question rather than a data-egress one.
+
+`symbol_graph.py` exists so this still works if the answer is no. It uses regex,
+not AST: roughly 70% recall, and its `calls` edges are name-matched rather than
+scope-resolved, so they're tagged `INFERRED`. Ambiguous names are dropped rather
+than guessed.
+
+Edge provenance follows Graphify's convention — `EXTRACTED` for what's read
+directly from source, `INFERRED` for what's derived. Treat every `INFERRED` edge
+as a lead to verify.
 
 The scripts deliberately **decide nothing**. They gather cited candidates and
 hand them to Claude to interpret. Dumb extraction plus smart interpretation
@@ -122,12 +160,16 @@ preferences; two copies of a rule will drift.
 2. Run `/cartographer:topology` and correct what it gets wrong. It will get
    things wrong on the first pass; that's expected, and correcting it is itself
    a fast way to learn the system.
-3. Run `/cartographer:trace-flow "buyer submits an order"`. This one document
+3. Build the symbol layer:
+   ```bash
+   python3 scripts/symbol_graph.py /projects/ong -o context/symbols.json
+   ```
+4. Run `/cartographer:trace-flow "buyer submits an order"`. This one document
    will teach you more than a week of reading.
-4. From then on, run `/cartographer:map-service <name>` whenever real work
+5. From then on, run `/cartographer:map-service <name>` whenever real work
    takes you into an unfamiliar service. Coverage earned through actual work
    beats coverage guessed in a batch.
-5. Log questions with `/cartographer:journal` as they come up. Batch-answer
+6. Log questions with `/cartographer:journal` as they come up. Batch-answer
    weekly.
 
 ---
