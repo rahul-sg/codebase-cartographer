@@ -5,6 +5,11 @@ months in.
 
 ---
 
+> **Working on the iTradeNetwork OMS?** Read [ITN-GUIDE.md](ITN-GUIDE.md)
+> alongside this — it covers the stack-specific behaviour (Kafka constants,
+> reactor-excluded modules, the two migration systems, proxy configs) and ships
+> a pre-filled `cartographer.itn.yaml`.
+
 ## Part 1 — Getting it onto your work machine
 
 ### What you are moving

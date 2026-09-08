@@ -23,7 +23,9 @@ about functions. Each layer is blind exactly where the other sees.
 | Layer | What it maps | Built from |
 |---|---|---|
 | **Symbol** | classes, functions, `calls` / `imports` / `extends` | source, 9 languages |
-| **Service** | who calls whom, events, owned data, contracts | config, specs, **runtime traces** |
+| **Module** | services vs shared libraries, build-graph deps, reactor exclusions | Maven/Gradle/npm/go manifests |
+| **Service** | who calls whom, events, contracts, hosts | config, proxy configs, specs, **runtime traces** |
+| **Data** | tables, who declares them, who reads and writes them | migration SQL + SQL in DAOs |
 | **Behavioural** | hotspots, change coupling, ownership | git history |
 
 The layers are joined — every symbol carries its service — so `blast_radius`
@@ -70,7 +72,7 @@ Then in Claude Code, just work — the MCP tools are used automatically.
 
 | Command | Purpose |
 |---|---|
-| `init --root <dir>` | Discover repos, write `cartographer.yaml` |
+| `init --root <dir>` | Discover repos, modules, containers and proxy prefixes; write a pre-filled config |
 | `scan [--trace <file>]` | Build/refresh the graph and reports |
 | `map "<task>"` | Ranked repo map for a task, within a token budget |
 | `impact <target>` | Blast radius across both layers |
@@ -81,6 +83,8 @@ Then in Claude Code, just work — the MCP tools are used automatically.
 | `hotspots [--bus-factor]` | Churn × complexity; single-author risk |
 | `owns <path>` | Who has actually worked on this code |
 | `path <a> <b>` | How two things are connected |
+| `schema [table]` | Tables, owners, and cross-service data access |
+| `secrets` | Credential locations (values are never recorded) |
 | `questions` | What the scan could not determine |
 | `report` / `stats` | Regenerate reports / inspect the graph |
 | `doctor` | Check the environment |
@@ -89,8 +93,8 @@ Then in Claude Code, just work — the MCP tools are used automatically.
 ## MCP tools
 
 `repo_map` · `find_symbol` · `blast_radius` · `service_topology` · `who_owns` ·
-`hotspots` · `coupled_files` · `shortest_path` · `contracts` ·
-`open_questions` · `graph_stats`
+`hotspots` · `coupled_files` · `shortest_path` · `contracts` · `schema_map` ·
+`module_inventory` · `secret_locations` · `open_questions` · `graph_stats`
 
 ## Skills
 
@@ -122,6 +126,28 @@ Written to `.cartographer/`:
 - **Absence of an edge is not proof of safety.** A dependent may live in a repo
   you do not have, or be reached through reflection, DI, a mesh, or config.
 
+## Conventions it handles that trip up generic tools
+
+- **Topic names as enum constants**, resolved at runtime rather than written as
+  string literals — a literal-scanning regex finds none of them.
+- **Modules excluded from the parent Maven reactor** that still build and
+  deploy. A parent-POM module scan misses these; they are real services.
+- **No ORM.** Schema is read from migration SQL (legacy patch-lists *and*
+  Flyway), and data access from SQL strings in hand-written DAOs — with
+  `+`-concatenated literals merged first, because that is how DAO SQL is
+  actually written.
+- **Frontend proxy configs** as the real dependency declaration, since SPAs
+  call path prefixes rather than naming services.
+- **Spring routes split across class-level and method-level annotations**,
+  composed into full paths.
+- **One schema shared by two services**, which reading either module alone
+  cannot reveal.
+- **Credentials in source**: flagged by location, never by value. A test
+  asserts the values are absent from `graph.db`.
+
+Working on an iTradeNetwork OMS-shaped estate? See **[ITN-GUIDE.md](ITN-GUIDE.md)**
+and the pre-filled `cartographer.itn.yaml`.
+
 ## Known limits
 
 - The regex backend is ~70% recall versus a real parser, and `calls` edges are
@@ -141,8 +167,12 @@ work environment. Ask before committing a generated `CLAUDE.md` to a team repo.
 ## Tests
 
 ```bash
-python3 tests/test_all.py        # 71 tests, builds a synthetic estate
+python3 tests/test_all.py        # 96 tests; builds two synthetic estates
 ```
+
+One fixture is a generic polyglot estate; the other mirrors a Maven
+multi-module backend with constant-based Kafka topics, Angular proxy configs,
+two migration systems and no ORM.
 
 ## Credit
 
