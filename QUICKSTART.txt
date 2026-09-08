@@ -1,0 +1,14 @@
+codebase-cartographer
+=====================
+
+For a human in a hurry:
+
+    ./install.sh                    # verify it runs here (~10s)
+    cd <directory containing your repos>
+    /path/to/bin/cartographer init --root .
+    /path/to/bin/cartographer scan
+    /path/to/bin/cartographer ui    # opens http://127.0.0.1:8787
+
+For Claude: read SETUP-FOR-CLAUDE.md — it is a complete runbook.
+
+Requires Python 3.8+ and git. Nothing else. No pip install, no network.
