@@ -9,6 +9,7 @@ scarce skill.
 from __future__ import annotations
 
 import json
+import re
 import time
 
 from . import mermaid
@@ -161,6 +162,87 @@ def build(store, cfg, stats=None):
                           b["author_share"] * 100, b["revisions"]))
             L.append("")
 
+    # ---- modules ----
+    mods = list(store.conn.execute(
+        "SELECT name, kind, extra FROM nodes WHERE extra LIKE '%artifactId%' "
+        "ORDER BY kind, name"))
+    if mods:
+        outside = []
+        L.append("## Module inventory")
+        L.append("")
+        L.append("| Module | Kind | Notes |")
+        L.append("|---|---|---|")
+        for m in mods:
+            try:
+                ex = json.loads(m["extra"])
+            except (ValueError, TypeError):
+                continue
+            tags = []
+            if ex.get("in_reactor") is False:
+                tags.append("**outside the reactor**")
+                outside.append(m["name"])
+            if ex.get("war"):
+                tags.append("WAR")
+            if ex.get("spring_boot_app"):
+                tags.append("Boot app")
+            if ex.get("has_controllers"):
+                tags.append("controllers")
+            L.append("| `%s` | %s | %s |" % (m["name"], m["kind"], ", ".join(tags)))
+        L.append("")
+        if outside:
+            L.append("> **%d module(s) build and deploy outside the parent "
+                     "reactor: %s.** They are real services. A build or module "
+                     "scan driven by the parent POM alone will miss them."
+                     % (len(outside), ", ".join("`%s`" % o for o in outside)))
+            L.append("")
+
+    # ---- schema ----
+    tables = list(store.conn.execute(
+        "SELECT name, service, extra FROM nodes WHERE kind='table' "
+        "ORDER BY service, name"))
+    shared_tables = list(store.conn.execute(
+        "SELECT detail, hint FROM gaps WHERE category='shared-table' ORDER BY detail"))
+    if tables:
+        L.append("## Data ownership")
+        L.append("")
+        L.append("%d tables, read from migration SQL rather than from ORM "
+                 "annotations." % len(tables))
+        L.append("")
+        if shared_tables:
+            L.append("### Tables touched by more than one service")
+            L.append("")
+            L.append("The coupling no API contract documents. Two services on "
+                     "one table are bound together whatever the interfaces say.")
+            L.append("")
+            for r in shared_tables:
+                L.append("- %s" % r["detail"])
+                L.append("  - *%s*" % r["hint"])
+            L.append("")
+        by_svc = {}
+        for t_ in tables:
+            by_svc.setdefault(t_["service"] or "(not declared locally)", []).append(t_["name"])
+        L.append("### Tables by declaring service")
+        L.append("")
+        for svc, names in sorted(by_svc.items()):
+            L.append("- **%s** (%d): %s" % (svc, len(names),
+                                            ", ".join("`%s`" % n for n in names[:25])))
+        L.append("")
+
+    # ---- credentials ----
+    secret_rows = list(store.conn.execute(
+        "SELECT detail FROM gaps WHERE category='credential-in-source' ORDER BY detail"))
+    if secret_rows:
+        L.append("## Possible credentials in source")
+        L.append("")
+        L.append("**The values were never read into the graph** — only these "
+                 "locations. Open each line yourself. If real: rotate it, move "
+                 "it to a secrets manager, and never paste the value into a "
+                 "prompt, a ticket, or a chat.")
+        L.append("")
+        for r in secret_rows:
+            L.append("- %s" % r["detail"])
+        L.append("")
+
     # ---- contracts ----
     routes = list(store.conn.execute(
         "SELECT name, service, extra FROM nodes WHERE kind='route' "
@@ -233,6 +315,48 @@ def suggest_questions(store):
     sharp; vague ones make them look lost.
     """
     qs = []
+    # Ordered by how much a good answer is worth, not by category name.
+    for r in store.conn.execute(
+            "SELECT detail FROM gaps WHERE category='shared-table' LIMIT 4"):
+        qs.append("%s — who is allowed to WRITE that table, and is the other "
+                  "service's access deliberate or historical?" % r["detail"])
+    for r in store.conn.execute(
+            "SELECT detail FROM gaps WHERE category IN "
+            "('module-outside-reactor','module-standalone') LIMIT 3"):
+        qs.append("%s — how is it actually built and deployed, and does CI "
+                  "cover it?" % r["detail"])
+    for r in store.conn.execute(
+            "SELECT COUNT(*) n FROM gaps WHERE category='credential-in-source'"):
+        if r["n"]:
+            qs.append("%d credential-shaped strings are hardcoded in source "
+                      "(see `cartographer secrets` for locations) — is there a "
+                      "secrets manager I should be moving these to, and who "
+                      "owns rotating them?" % r["n"])
+    for r in store.conn.execute(
+            "SELECT detail FROM gaps WHERE category='shared-schema' LIMIT 3"):
+        qs.append("%s — is that intentional shared ownership, or a "
+                  "copy-paste in the compose file?" % r["detail"])
+    for r in store.conn.execute(
+            "SELECT COUNT(*) n FROM gaps WHERE category='table-not-declared-locally'"):
+        if r["n"]:
+            qs.append("%d tables are queried but have no CREATE statement in "
+                      "any repo I can see — where does that DDL live?" % r["n"])
+    for r in store.conn.execute(
+            "SELECT detail FROM gaps WHERE category='proxy-prefix-unmapped' LIMIT 3"):
+        qs.append("%s — what service is behind that prefix, and do I have "
+                  "access to its repo?" % r["detail"])
+    for r in store.conn.execute(
+            "SELECT detail FROM gaps WHERE category='topic-constant-unreferenced' LIMIT 2"):
+        qs.append("%s — is that event consumed by a service outside my "
+                  "workspace, or is the constant dead?" % r["detail"])
+    for r in store.conn.execute(
+            "SELECT detail FROM gaps WHERE category='shared-library-version-drift' LIMIT 2"):
+        qs.append("%s — is that drift deliberate, and does a fix in the library "
+                  "need porting to both?" % r["detail"])
+    for r in store.conn.execute(
+            "SELECT detail FROM gaps WHERE category='jndi-datasource' LIMIT 2"):
+        qs.append("%s — what host and schema does that JNDI name actually "
+                  "resolve to in each environment?" % r["detail"])
     for r in store.conn.execute(
             "SELECT detail FROM gaps WHERE category='shared-datastore' LIMIT 3"):
         qs.append("%s — which service is the source of truth for that schema, "
@@ -269,4 +393,14 @@ def suggest_questions(store):
         qs.append("Nothing obviously unexplained — try `cartographer trace "
                   "\"buyer submits an order\"` and see whether the story holds "
                   "together end to end.")
-    return qs[:12]
+    # Two categories can describe the same underlying fact (a shared schema is
+    # reported by both the compose reader and the topology scan). Deduplicate
+    # on the leading clause so the list stays worth reading.
+    seen, uniq = set(), []
+    for q in qs:
+        key = re.sub(r"[^a-z0-9]", "", q.split("—")[0].lower())[:70]
+        if key in seen:
+            continue
+        seen.add(key)
+        uniq.append(q)
+    return uniq[:16]

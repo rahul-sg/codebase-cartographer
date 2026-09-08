@@ -84,6 +84,26 @@ K8S_SERVICE_HOST = re.compile(
 # HTTP routes (used to describe the contract surface of a service)
 ROUTE_ANN = re.compile(
     r"""@(Get|Post|Put|Delete|Patch|Request)Mapping\s*\(\s*(?:value\s*=\s*)?["']([^"']+)["']""", re.I)
+
+# --- Spring controllers: the path is split across two annotations ----------
+# A class carries the prefix and each method carries the rest, so reading only
+# method annotations yields "/{id}" instead of "/order/api/v1/orders/{id}".
+CONTROLLER_ANN = re.compile(r"@(?:Rest)?Controller\b")
+CLASS_DECL = re.compile(r"^\s*(?:@\w+[^\n]*\s*)*(?:public\s+|final\s+|abstract\s+)*"
+                        r"(?:class|interface)\s+(\w+)")
+MAPPING_ANY = re.compile(
+    r"@(Get|Post|Put|Delete|Patch|Request)Mapping\b\s*(\((?P<args>[^)]*)\))?", re.I)
+MAPPING_PATH = re.compile(r"""(?:^|[\s(,])(?:value|path)\s*=\s*\{?\s*["']([^"']*)["']""", re.I)
+MAPPING_BARE = re.compile(r"""^\s*\{?\s*["']([^"']*)["']""")
+MAPPING_METHOD = re.compile(r"RequestMethod\.(\w+)", re.I)
+
+# Cache usage is annotation-mediated here, so direct RedisTemplate calls are
+# rare and grepping for them finds almost nothing.
+CACHE_ANN = re.compile(r"@(\w*Redis\w*Cacheable|Cacheable|CacheEvict|CachePut)\b")
+# JNDI-resolved datasources: the connection string lives in a container, not
+# in the repo, so the JNDI name is all we can see.
+JNDI = re.compile(r"""["']?(java:/?(?:comp/env/)?jdbc/[\w.\-/]+)["']?""", re.I)
+JNDI_PROP = re.compile(r"""(?:jndi[-_.]?name|jndiName)\s*[:=]\s*["']?([\w:/.\-]+)""", re.I)
 ROUTE_DECOR = re.compile(
     r"""@(?:app|router|bp|api)\.(get|post|put|delete|patch|route)\s*\(\s*["']([^"']+)["']""", re.I)
 ROUTE_EXPRESS = re.compile(
@@ -95,6 +115,55 @@ schemas.xmlsoap.org www.w3.org xmlns.jcp.org java.sun.com maven.apache.org
 github.com gitlab.com bitbucket.org npmjs.com pypi.org docs.oracle.com
 apache.org spring.io localhost.localdomain host.docker.internal
 """.split())
+
+
+def spring_routes(text):
+    """
+    Compose full HTTP paths from class-level + method-level annotations.
+
+    Returns [(verb, path, line)]. A controller with no class-level mapping
+    still works; the prefix is simply empty.
+    """
+    if not CONTROLLER_ANN.search(text):
+        return []
+    lines = text.split("\n")
+    class_line = None
+    for i, line in enumerate(lines):
+        if re.match(r"^\s*(?:public\s+|final\s+|abstract\s+)*(?:class|interface)\s+\w+", line):
+            class_line = i
+            break
+    if class_line is None:
+        return []
+
+    prefix = ""
+    for i in range(max(0, class_line - 12), class_line):
+        m = MAPPING_ANY.search(lines[i])
+        if m and m.group(1).lower() == "request":
+            args = m.group("args") or ""
+            pm = MAPPING_PATH.search(args) or MAPPING_BARE.match(args)
+            if pm:
+                prefix = pm.group(1)
+            break
+
+    out = []
+    for i in range(class_line + 1, len(lines)):
+        line = lines[i]
+        m = MAPPING_ANY.search(line)
+        if not m:
+            continue
+        kind = m.group(1).lower()
+        args = m.group("args") or ""
+        if kind == "request":
+            mm = MAPPING_METHOD.search(args)
+            verb = mm.group(1).upper() if mm else "ANY"
+        else:
+            verb = kind.upper()
+        pm = MAPPING_PATH.search(args) or MAPPING_BARE.match(args)
+        sub = pm.group(1) if pm else ""
+        full = "/" + "/".join(
+            seg for seg in (prefix + "/" + sub).split("/") if seg)
+        out.append((verb, full or "/", i + 1))
+    return out
 
 
 def _relevant_files(repo_root, follow=False):
@@ -140,6 +209,8 @@ def run(store, cfg, repos, progress=None):
 
     services = {}          # canonical name -> node dict
     edges = []
+    cache_use = {}         # service -> {annotation: evidence}
+    jndi = {}              # service -> {jndi name: evidence}
     produces = {}          # topic -> set(service)
     consumes = {}          # topic -> set(service)
     topic_evidence = {}    # (service, topic, role) -> "path:line"
@@ -158,14 +229,24 @@ def run(store, cfg, repos, progress=None):
         return services[name]["id"]
 
     for repo_name, repo_root, svc_name in repos:
-        me = svc_name or repo_name
-        ensure_service(me, repo_name)
+        ensure_service(svc_name or repo_name, repo_name)
 
         for path in _relevant_files(repo_root, cfg.defaults.get("follow_symlinks", False)):
             rel = os.path.relpath(path, repo_root).replace(os.sep, "/")
             low_name = os.path.basename(path).lower()
             is_compose = "docker-compose" in low_name
             lines = _read_lines(path)
+            # In a repo of Maven modules the repo name is far too coarse: every
+            # finding would be attributed to `ong-server-repo` and every schema
+            # would look shared. Resolve the owning module per file.
+            me = _module_owner(cfg, repo_root, path, svc_name or repo_name)
+            ensure_service(me, repo_name)
+
+            # Java controllers need whole-file context to compose paths.
+            if path.endswith((".java", ".kt")) and "Mapping" in "\n".join(lines[:400]):
+                for verb, full, ln in spring_routes("\n".join(lines)):
+                    routes.append((me, verb, full,
+                                   "%s/%s:%d" % (repo_name, rel, ln)))
 
             for i, line in enumerate(lines, start=1):
                 if not line.strip() or len(line) > 4000:
@@ -256,8 +337,10 @@ def run(store, cfg, repos, progress=None):
                     # the topic exists as a node even if we cannot orient it.
                     topic_evidence.setdefault((me, t, "mention"), ev)
 
-                # 5. databases (shared schema is a hidden coupling)
-                for m in DB_URL.finditer(line):
+                # 5. databases (shared schema is a hidden coupling).
+                # Skipped inside compose files: those describe other services,
+                # and extract/compose.py attributes them correctly.
+                for m in (() if is_compose else DB_URL.finditer(line)):
                     dsn = (m.group(2) or m.group(4) or "").strip().rstrip("/")
                     engine = (m.group(1) or m.group(3) or "db").lower()
                     if not dsn or "${" in dsn:
@@ -281,15 +364,22 @@ def run(store, cfg, repos, progress=None):
                                                "EXTRACTED", 0.7,
                                                "compose depends_on"))
 
-                # 7. HTTP routes exposed by this service
-                for m in ROUTE_ANN.finditer(line):
-                    verb = m.group(1).upper()
-                    routes.append((me, "" if verb == "REQUEST" else verb,
-                                   m.group(2), ev))
+                # 7. non-Java routes (Python decorators, Express)
                 for m in ROUTE_DECOR.finditer(line):
-                    routes.append((me, m.group(1).upper(), m.group(2), ev))
+                    verb = m.group(1).upper()
+                    routes.append((me, "ANY" if verb == "ROUTE" else verb,
+                                   m.group(2), ev))
                 for m in ROUTE_EXPRESS.finditer(line):
                     routes.append((me, m.group(1).upper(), m.group(2), ev))
+
+                # 8. cache annotations and JNDI datasources
+                cm = CACHE_ANN.search(line)
+                if cm:
+                    cache_use.setdefault(me, {}).setdefault(cm.group(1), ev)
+                for m in JNDI.finditer(line):
+                    jndi.setdefault(me, {}).setdefault(m.group(1), ev)
+                for m in JNDI_PROP.finditer(line):
+                    jndi.setdefault(me, {}).setdefault(m.group(1), ev)
 
     # -- topics become nodes; producer->consumer becomes an event edge -----
     topic_nodes = {}
@@ -363,6 +453,30 @@ def run(store, cfg, repos, progress=None):
         edges.append(_edge_raw(ids.service_id(svc), rid, "exposes", ev,
                                "EXTRACTED", 0.95, pattern))
 
+    # cache + JNDI as first-class infrastructure edges
+    for svc, anns in cache_use.items():
+        ensure_service(svc)
+        cid = "cart . infra cache"
+        db_nodes.append({"id": cid, "kind": "infra", "name": "cache (Redis)"})
+        for ann, ev in list(anns.items())[:1]:
+            edges.append(_edge_raw(ids.service_id(svc), cid, "uses-cache", ev,
+                                   "EXTRACTED", 0.95,
+                                   "@%s (%d annotated sites)" % (ann, len(anns))))
+    for svc, names in jndi.items():
+        ensure_service(svc)
+        for name, ev in names.items():
+            did = "cart . datastore jndi:%s" % name
+            db_nodes.append({"id": did, "kind": "datastore", "name": name,
+                             "extra": {"jndi": True}})
+            edges.append(_edge_raw(ids.service_id(svc), did, "uses-datastore",
+                                   ev, "EXTRACTED", 0.9,
+                                   "JNDI %s (connection defined outside the repo)" % name))
+            gaps.append(("jndi-datasource",
+                         "%s resolves a datasource through JNDI (%s)" % (svc, name),
+                         "the actual host and schema live in the container or "
+                         "app-server config, not in this repo -- check the "
+                         "deployment descriptor to learn what it points at"))
+
     nodes = list(services.values()) + list(topic_nodes.values()) \
         + db_nodes + route_nodes
     store.add_nodes(nodes, SOURCE)
@@ -379,6 +493,19 @@ def run(store, cfg, repos, progress=None):
     return {"services": len(services), "topics": len(topic_nodes),
             "datastores": len(db_nodes), "routes": len(route_nodes),
             "service_edges": len(svc_edges), "gaps": len(seen)}
+
+
+def _module_owner(cfg, repo_root, path, fallback):
+    """A multi-module repo means the repo name is too coarse to be the owner."""
+    rel = os.path.relpath(path, repo_root).replace(os.sep, "/")
+    parts = rel.split("/")
+    for anchor in ("server", "modules", "services", "apps"):
+        if anchor in parts:
+            i = parts.index(anchor)
+            if i + 1 < len(parts) - 1:
+                name = parts[i + 1]
+                return cfg.resolve_service(name) or name
+    return fallback
 
 
 def _topic(raw):

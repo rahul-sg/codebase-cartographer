@@ -142,6 +142,34 @@ class Server(object):
                         "to ask, because they are the knowledge nobody wrote down.",
          "inputSchema": {"type": "object", "properties": {}}},
 
+        {"name": "schema_map",
+         "description": "Database tables: which service declares each one and "
+                        "which services read or write it. Use when a change "
+                        "touches data, when asking who owns a table, or to find "
+                        "cross-service data coupling. In a codebase with no JPA "
+                        "this is the only way to see data ownership.",
+         "inputSchema": {"type": "object", "properties": {
+             "table": {"type": "string", "description": "optional: one table"},
+             "service": {"type": "string", "description": "optional: one service"},
+             "shared_only": {"type": "boolean", "default": False,
+                             "description": "only tables touched by 2+ services"}}}},
+
+        {"name": "module_inventory",
+         "description": "Every module: which are deployable services, which are "
+                        "shared libraries, and which build OUTSIDE the parent "
+                        "Maven reactor. Reactor-excluded modules are real "
+                        "services that a naive parent-pom scan misses.",
+         "inputSchema": {"type": "object", "properties": {
+             "kind": {"type": "string", "enum": ["service", "library", "all"],
+                      "default": "all"}}}},
+
+        {"name": "secret_locations",
+         "description": "Locations of credential-shaped strings found in "
+                        "source. Returns file and line ONLY -- values are never "
+                        "read into the graph. Never paste a secret value into a "
+                        "prompt, ticket, or chat.",
+         "inputSchema": {"type": "object", "properties": {}}},
+
         {"name": "graph_stats",
          "description": "What is in the graph and when it was built. Call this "
                         "if results look stale or empty.",
@@ -297,6 +325,59 @@ class Server(object):
             qs = md_report.suggest_questions(st)
             return "\n".join("- %s" % q for q in qs)
 
+        if name == "schema_map":
+            return self._schema(st, a.get("table"), a.get("service"),
+                                bool(a.get("shared_only")))
+
+        if name == "module_inventory":
+            want = (a.get("kind") or "all").lower()
+            rows = list(st.conn.execute(
+                "SELECT name, kind, repo, extra FROM nodes "
+                "WHERE (kind='service' OR kind='library') AND extra IS NOT NULL "
+                "ORDER BY kind, name"))
+            if not rows:
+                return ("No module inventory. Run a scan against a repo with "
+                        "build files (pom.xml, package.json, go.mod).")
+            out, outside = [], []
+            for r in rows:
+                if want != "all" and r["kind"] != want:
+                    continue
+                try:
+                    ex = json.loads(r["extra"])
+                except ValueError:
+                    continue
+                if "artifactId" not in ex:
+                    continue
+                tags = []
+                if ex.get("in_reactor") is False:
+                    tags.append("OUTSIDE REACTOR")
+                    outside.append(r["name"])
+                if ex.get("war"):
+                    tags.append("war")
+                if ex.get("spring_boot_app"):
+                    tags.append("boot-app")
+                if ex.get("has_controllers"):
+                    tags.append("controllers")
+                out.append("  %-9s %-22s %s" % (r["kind"], r["name"],
+                                                ", ".join(tags)))
+            body = "\n".join(out) or "(nothing matched)"
+            if outside:
+                body += ("\n\nBuilt and deployed OUTSIDE the parent reactor: %s"
+                         "\nThese are real services. Do not assume the top-level "
+                         "build covers them." % ", ".join(outside))
+            return body
+
+        if name == "secret_locations":
+            rows = list(st.conn.execute(
+                "SELECT detail FROM gaps WHERE source='secrets' ORDER BY detail"))
+            if not rows:
+                return ("No credential-shaped strings found. That is not a "
+                        "guarantee -- only common shapes are checked.")
+            return ("Possible credentials. VALUES WERE NEVER READ into the "
+                    "graph; these are locations only. Open each line yourself. "
+                    "Never paste a secret value into a prompt, ticket or chat."
+                    "\n\n" + "\n".join("  " + r["detail"] for r in rows))
+
         if name == "graph_stats":
             c = st.counts()
             meta = st.all_meta()
@@ -365,6 +446,97 @@ class Server(object):
         out.append("Note: an edge to a service whose repo is not on disk is "
                    "still real. Absence of an edge is not proof of independence.")
         return "\n".join(out)
+
+    def _schema(self, st, table=None, service=None, shared_only=False):
+        cfg = self.cfg()
+        out = []
+        if table:
+            rows = list(st.conn.execute(
+                "SELECT * FROM nodes WHERE kind='table' AND name LIKE ? COLLATE NOCASE "
+                "ORDER BY name LIMIT 20", ("%" + table + "%",)))
+            if not rows:
+                return "No table matches %r." % table
+            for n in rows:
+                out.append(self._one_table(st, n))
+            return "\n".join(out)
+
+        if service:
+            canon = cfg.resolve_service(service) or service
+            rows = list(st.conn.execute(
+                "SELECT e.kind, e.dst, e.evidence FROM edges e "
+                "WHERE e.src=? AND e.kind IN "
+                "('defines-table','reads-table','writes-table') ORDER BY e.kind, e.dst",
+                (ids.service_id(canon),)))
+            if not rows:
+                return ("No table access recorded for %s. Either it does not "
+                        "touch the database directly, or its SQL is assembled "
+                        "in a way the scan could not read (a QueryBuilder "
+                        "abstraction rather than literal strings)." % canon)
+            out.append("Tables touched by %s:" % canon)
+            for r in rows:
+                out.append("  %-14s %-34s %s"
+                           % (r["kind"].replace("-table", ""),
+                              r["dst"].split(" ", 3)[-1], r["evidence"] or ""))
+            return "\n".join(out)
+
+        shared = list(st.conn.execute(
+            "SELECT detail, hint FROM gaps WHERE category='shared-table' "
+            "ORDER BY detail"))
+        total = st.conn.execute(
+            "SELECT COUNT(*) n FROM nodes WHERE kind='table'").fetchone()["n"]
+        undeclared = st.conn.execute(
+            "SELECT COUNT(*) n FROM gaps WHERE category='table-not-declared-locally'"
+        ).fetchone()["n"]
+        out.append("%d tables in the graph." % total)
+        if undeclared:
+            out.append("%d are queried but have no CREATE statement in the repos "
+                       "on disk -- their DDL is probably in an external schema "
+                       "repo." % undeclared)
+        out.append("")
+        if shared:
+            out.append("Tables touched by more than one service. This is "
+                       "coupling that no API contract documents:")
+            out.append("")
+            for r in shared:
+                out.append("  %s" % r["detail"])
+                out.append("      %s" % r["hint"])
+        elif not shared_only:
+            out.append("No cross-service table access detected.")
+        if not shared_only:
+            rows = list(st.conn.execute(
+                "SELECT n.name, n.service, n.extra FROM nodes n "
+                "WHERE n.kind='table' ORDER BY n.service, n.name LIMIT 120"))
+            if rows:
+                out.append("")
+                out.append("Tables by declaring service:")
+                cur = None
+                for r in rows:
+                    if r["service"] != cur:
+                        cur = r["service"]
+                        out.append("")
+                        out.append("  %s:" % (cur or "(not declared locally)"))
+                    out.append("    %s" % r["name"])
+        return "\n".join(out)
+
+    def _one_table(self, st, n):
+        ex = {}
+        try:
+            ex = json.loads(n["extra"] or "{}")
+        except ValueError:
+            pass
+        L = ["", n["name"],
+             "  declared: %s" % (ex.get("declared_at")
+                                 or "NOT found in the repos on disk")]
+        if ex.get("migration_system"):
+            L.append("  via:      %s migration" % ex["migration_system"])
+        for kind, label in (("defines-table", "owner"), ("writes-table", "writes"),
+                            ("reads-table", "reads")):
+            for r in st.conn.execute(
+                    "SELECT src, evidence FROM edges WHERE dst=? AND kind=?",
+                    (n["id"], kind)):
+                L.append("  %-8s  %-16s %s" % (label, r["src"].split(" ", 3)[-1],
+                                               r["evidence"] or ""))
+        return "\n".join(L)
 
     def _contracts(self, st, service=None):
         cfg = self.cfg()

@@ -159,7 +159,13 @@ class Config(object):
 
 # -- helpers ---------------------------------------------------------------
 
-_SUFFIXES = ("service", "svc", "server", "api", "app", "srv", "ms")
+_SUFFIXES = ("service", "svc", "server", "api", "app", "srv", "ms",
+             "ui", "web", "frontend", "client", "backend", "gateway")
+
+# Environment suffixes glued onto a service abbreviation, which is how this
+# estate names both hosts and schemas: icrdev / icrsqe / iomsqe / itlsqe.
+_ENV_SUFFIXES = ("dev", "sqe", "uat", "prd", "prod", "qa", "stg", "stage",
+                 "test", "local", "int", "perf")
 
 
 def _expand(p):
@@ -186,13 +192,25 @@ def _token_variants(t):
     t = str(t).strip()
     out = {t, t.lower()}
 
-    # A container image reference: registry/org/name:tag@digest. Only the
-    # final path segment names the service.
+    # A container image reference (registry/org/name:tag@digest) or a URL path
+    # prefix (/contract/v1/). Only the meaningful segment names the service.
     if "/" in t or ":" in t:
+        stripped = t.strip("/")
+        first = stripped.split("/")[0].split(":")[0]
         tail = t.split("@")[0].split("/")[-1].split(":")[0]
-        if tail and tail != t:
-            out.add(tail)
-            out |= _token_variants(tail)
+        for cand in (first, tail):
+            if cand and cand != t:
+                out.add(cand)
+                out |= _token_variants(cand)
+
+    # A bare abbreviation with an environment suffix glued on: icrsqe -> icr.
+    low_t = t.lower()
+    for env in _ENV_SUFFIXES:
+        if low_t.endswith(env) and len(low_t) > len(env) + 1:
+            stem = low_t[:-len(env)]
+            if len(stem) >= 2:
+                out.add(stem)
+                out.add(stem.rstrip("-_."))
 
     # split camelCase / PascalCase into words
     spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", t)

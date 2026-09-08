@@ -32,6 +32,14 @@ KIND_WEIGHT = {
     "uses-datastore": 1.5,
     "uses-library": 0.2,  # everything uses libraries; near-zero signal
     "couples-with": 2.5,  # from history: co-change is real coupling
+    # Data access is the strongest coupling signal in an estate with no JPA:
+    # two services on one table are bound together whatever the API says.
+    "writes-table": 3.0,
+    "reads-table": 1.5,
+    "defines-table": 1.0,
+    "routes-to": 0.5,     # a host, not a dependency
+    "links-to": 0.5,      # legacy page reference
+    "uses-cache": 0.5,
 }
 DEFAULT_KIND_WEIGHT = 1.0
 

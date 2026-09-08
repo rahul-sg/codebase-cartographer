@@ -9,7 +9,9 @@ import time
 
 from . import __version__, config as cfgmod
 from .store import Store
-from .extract import symbols, topology, history, specs, builddeps, traces
+from .extract import (symbols, topology, history, specs, builddeps,
+                      traces, maven, kafka, frontend, sqlschema,
+                      compose, secrets)
 from .analyze import pagerank, hotspots, impact, repomap
 from .report import markdown as md_report, html as html_report, mermaid
 
@@ -61,6 +63,14 @@ def _open(cfg, create=True):
 # ---------------------------------------------------------------- init
 
 def cmd_init(args):
+    """
+    Discover the estate and write a config that is already mostly right.
+
+    Repos alone are not the service inventory. In a Maven multi-module backend
+    the services are the MODULES, and the aliases that matter come from
+    docker-compose container names and frontend proxy prefixes. Gathering all
+    of that here is what turns the first scan from noisy into useful.
+    """
     base = os.path.abspath(args.dir or os.getcwd())
     roots = [os.path.abspath(os.path.expanduser(r)) for r in (args.root or [])]
     if not roots:
@@ -72,45 +82,229 @@ def cmd_init(args):
         note("Point --root at the directory that CONTAINS your service repos.")
         return 1
 
-    lines = ["# cartographer configuration",
-             "# Generated %s. Edit freely -- your edits are never overwritten."
-             % time.strftime("%Y-%m-%d"),
-             "",
-             "roots:"]
-    for r in roots:
-        lines.append("  - %s" % r)
-    lines += ["", "defaults:",
-              "  history_months: 12",
-              "  call_edges: true",
-              "",
-              "# Aliases matter more than anything else here: the same service",
-              "# gets written a dozen ways across code, config and image tags.",
-              "# Every alias you add makes the map sharper.",
-              "services:"]
-    for repo in found:
-        name = os.path.basename(repo.rstrip("/"))
-        lines += ["  - name: %s" % name,
-                  "    repo: %s" % repo,
-                  "    aliases: []",
-                  "    purpose: \"\"",
-                  "    owns_data: []"]
-    lines += ["", "# Journeys worth tracing end to end.", "flows:",
-              "  - buyer submits an order", "",
-              "# Exported APM service-graph files, if you have them. These are",
-              "# the strongest evidence available: measured, not inferred.",
-              "traces: []", ""]
+    note("Found %d repositories. Discovering services…" % len(found))
+    triples = [(os.path.basename(r.rstrip("/")), r, os.path.basename(r.rstrip("/")))
+               for r in found]
+    empty = cfgmod.Config({}, None, base)
+
+    # --- Maven modules -------------------------------------------------
+    modules = {}          # name -> dict
+    for repo_name, repo_root, _s in triples:
+        for pom in maven.find_poms(repo_root):
+            info = maven.parse_pom(pom)
+            if not info:
+                continue
+            d = os.path.dirname(pom)
+            if info["packaging"] == "pom" and info["modules"]:
+                continue
+            deploy = maven._deployable(d)
+            sig = maven._java_signals(d)
+            cfgfile = maven._has_app_config(d)
+            is_svc = bool(deploy) or sig["app"] or cfgfile or \
+                info["packaging"] == "war" or sig["controller"]
+            modules[info["artifactId"]] = {
+                "name": info["artifactId"], "repo": repo_name, "dir": d,
+                "service": is_svc,
+                "in_reactor": None, "schema": None, "aliases": set()}
+    # mark reactor membership
+    declared = set()
+    for repo_name, repo_root, _s in triples:
+        for pom in maven.find_poms(repo_root):
+            info = maven.parse_pom(pom)
+            if info and info["modules"]:
+                for m in info["modules"]:
+                    declared.add(os.path.normpath(
+                        os.path.join(os.path.dirname(pom), m)))
+    for m in modules.values():
+        m["in_reactor"] = os.path.normpath(m["dir"]) in declared
+
+    # --- docker-compose: container names and schemas --------------------
+    compose_map = {}
+    for repo_name, repo_root, _s in triples:
+        for cpath in compose._find(repo_root):
+            doc, _text = compose._load(cpath)
+            if not isinstance(doc, dict):
+                continue
+            for cname, body in (doc.get("services") or {}).items():
+                if not isinstance(body, dict):
+                    continue
+                image = str(body.get("image") or "")
+                if compose._is_infra(str(cname), image):
+                    continue
+                env = compose._env_items(body.get("environment"))
+                schema = None
+                for val in env.values():
+                    m = compose.JDBC.search(val or "")
+                    if m:
+                        schema = m.group(4)
+                        break
+                compose_map[str(cname)] = {"image": image, "schema": schema}
+
+    # --- frontend proxy prefixes ----------------------------------------
+    prefixes = set()
+    for repo_name, repo_root, _s in triples:
+        for path in frontend._files(repo_root, names=frontend.PROXY_NAMES):
+            text = frontend._read(path)
+            if not text:
+                continue
+            for m in frontend.PROXY_ENTRY.finditer(text):
+                seg = [s for s in m.group("prefix").split("/") if s]
+                if seg:
+                    prefixes.add(seg[0])
+
+    # --- fold discoveries into aliases ----------------------------------
+    def norm(s):
+        return cfgmod._norm_token(s)
+
+    by_norm = {norm(k): k for k in modules}
+    for cname, meta in compose_map.items():
+        key = by_norm.get(norm(cname))
+        if key:
+            modules[key]["aliases"].add(cname)
+            if meta["schema"]:
+                modules[key]["schema"] = meta["schema"]
+        else:
+            tail = (meta["image"] or "").split("/")[-1].split(":")[0]
+            key2 = by_norm.get(norm(tail))
+            if key2:
+                modules[key2]["aliases"].add(cname)
+                if meta["schema"]:
+                    modules[key2]["schema"] = meta["schema"]
+            elif cname:
+                modules[cname] = {"name": cname, "repo": "", "dir": "",
+                                  "service": True, "in_reactor": None,
+                                  "schema": meta["schema"], "aliases": set()}
+                by_norm[norm(cname)] = cname
+
+    def closest_module(token):
+        """
+        Suggest a module for an unmatched proxy prefix.
+
+        `/omsenterprise/` and `order-enterprise` share no exact form but one
+        clearly means the other, so fall back to substring containment on the
+        normalised tokens and take the longest overlap.
+        """
+        nt = norm(token)
+        best, best_len = None, 0
+        for name in modules:
+            nn = norm(name)
+            if not nn or not nt:
+                continue
+            if nn in nt or nt in nn:
+                overlap = min(len(nn), len(nt))
+                if overlap > best_len and overlap >= 4:
+                    best, best_len = name, overlap
+        return best
+
+    unmatched_prefixes = []
+    for pre in sorted(prefixes):
+        key = by_norm.get(norm(pre))
+        if key:
+            if norm(pre) != norm(key):
+                modules[key]["aliases"].add(pre)
+        else:
+            guess = closest_module(pre)
+            if guess:
+                # Record it as an alias, but tell the user it was a guess.
+                modules[guess]["aliases"].add(pre)
+                unmatched_prefixes.append((pre, guess))
+            else:
+                unmatched_prefixes.append((pre, None))
+
+    services = {k: v for k, v in modules.items() if v["service"]}
+    libraries = sorted(k for k, v in modules.items() if not v["service"])
+
+    # --- write it out ----------------------------------------------------
+    L = ["# cartographer configuration",
+         "# Generated %s by `cartographer init`. Your edits are never overwritten."
+         % time.strftime("%Y-%m-%d"),
+         "",
+         "roots:"]
+    L += ["  - %s" % r for r in roots]
+    L += ["", "defaults:", "  history_months: 12", "  call_edges: true", ""]
+
+    L += ["# Aliases are the highest-leverage thing in this file: the same",
+          "# service is written many ways across code, config and image tags.",
+          "# Those below were discovered automatically -- add any internal",
+          "# codenames or legacy names you know of.",
+          "services:"]
+    for name in sorted(services):
+        m = services[name]
+        L.append("  - name: %s" % name)
+        if m["dir"]:
+            L.append("    repo: %s" % m["dir"])
+        al = sorted(a for a in m["aliases"] if a != name)
+        L.append("    aliases: [%s]" % ", ".join(al))
+        if m["schema"]:
+            L.append("    owns_data: [%s]   # schema from docker-compose" % m["schema"])
+        else:
+            L.append("    owns_data: []")
+        if m["in_reactor"] is False and m["dir"]:
+            L.append("    # NOTE: builds and deploys outside the parent reactor")
+        L.append("    purpose: \"\"")
+
+    for pre, guess in unmatched_prefixes:
+        if guess:
+            continue      # already added as an alias above
+        L += ["  # A frontend proxies /%s/ but no module matched. If this is a" % pre,
+              "  # real service whose repo you do not have, name it here so",
+              "  # edges pointing at it resolve instead of being dropped.",
+              "  # - name: %s" % pre,
+              "  #   aliases: []"]
+
+    # A repo whose modules are already listed is not itself a service; adding
+    # it would double-count every finding inside it.
+    module_dirs = [m["dir"] for m in modules.values() if m["dir"]]
+    repo_by_name = dict((a, b) for a, b, _c in triples)
+    for repo_name, repo_root, _s in triples:
+        if norm(repo_name) in by_norm:
+            continue
+        if any(d.startswith(repo_root.rstrip("/") + os.sep) for d in module_dirs):
+            L += ["  # %s contains the modules listed above; it is a container"
+                  % repo_name,
+                  "  # for them, not a service in its own right."]
+            continue
+        L += ["  - name: %s" % repo_name, "    repo: %s" % repo_by_name[repo_name],
+              "    aliases: []", "    owns_data: []", "    purpose: \"\""]
+
+    L += ["", "flows:", "  - buyer submits an order", "",
+          "# Exported APM service graphs -- measured traffic beats inferred",
+          "# config, and reveals services whose repos you do not have.",
+          "traces: []", ""]
 
     dest = os.path.join(base, "cartographer.yaml")
     if os.path.exists(dest) and not args.force:
         note("%s already exists. Use --force to overwrite." % dest)
         return 1
     with open(dest, "w", encoding="utf-8") as fh:
-        fh.write("\n".join(lines))
-    note("Wrote %s with %d repositories:" % (dest, len(found)))
-    for repo in found:
-        note("  - %s" % os.path.basename(repo.rstrip("/")))
+        fh.write("\n".join(L))
+
     note("")
-    note("Next: review the aliases in that file, then run `cartographer scan`.")
+    note("Wrote %s" % dest)
+    note("  %d repositories" % len(found))
+    note("  %d services%s" % (len(services),
+                              (" (%d outside the Maven reactor)" %
+                               sum(1 for m in services.values()
+                                   if m["in_reactor"] is False))
+                              if any(m["in_reactor"] is False
+                                     for m in services.values()) else ""))
+    if libraries:
+        note("  %d shared libraries (not services): %s"
+             % (len(libraries), ", ".join(libraries[:10])))
+    if compose_map:
+        note("  %d containers in docker-compose" % len(compose_map))
+    guessed = [(p, g) for p, g in unmatched_prefixes if g]
+    unknown = [p for p, g in unmatched_prefixes if not g]
+    if guessed:
+        note("  %d proxy prefixes matched by similarity (verify these):" % len(guessed))
+        for pre, g in guessed:
+            note("      /%s/  ->  %s" % (pre, g))
+    if unknown:
+        note("  %d proxy prefixes with no matching module: %s"
+             % (len(unknown), ", ".join(unknown)))
+        note("    (commented out in the config -- uncomment the real ones)")
+    note("")
+    note("Next: skim the aliases, then `cartographer scan`.")
     return 0
 
 
@@ -136,11 +330,21 @@ def cmd_scan(args):
 
     stats = {}
     steps = []
+    # maven first: it decides what counts as a service, which every later
+    # extractor attributes findings to.
+    steps.append(("maven", lambda: maven.run(st, cfg, triples, note)))
+    steps.append(("compose", lambda: compose.run(st, cfg, triples, note)))
     if not args.skip_symbols:
         steps.append(("symbols", lambda: symbols.run(st, cfg, triples, note)))
     steps.append(("topology", lambda: topology.run(st, cfg, triples, note)))
+    steps.append(("kafka", lambda: kafka.run(st, cfg, triples, note)))
+    steps.append(("frontend", lambda: frontend.run(st, cfg, triples, note)))
+    if not args.skip_sql:
+        steps.append(("sqlschema", lambda: sqlschema.run(st, cfg, triples, note)))
     steps.append(("specs", lambda: specs.run(st, cfg, triples, note)))
     steps.append(("builddeps", lambda: builddeps.run(st, cfg, triples, note)))
+    if not args.skip_secrets:
+        steps.append(("secrets", lambda: secrets.run(st, cfg, triples, note)))
     if not args.skip_history:
         steps.append(("history", lambda: history.run(st, cfg, triples, note)))
 
@@ -179,7 +383,15 @@ def cmd_scan(args):
 
     _write_reports(st, cfg)
     c = st.counts()
+    sec = st.conn.execute(
+        "SELECT COUNT(*) n FROM gaps WHERE category='credential-in-source'"
+    ).fetchone()["n"]
     note("")
+    if sec:
+        note("  !! %d possible credential%s found in source. Values were NOT"
+             % (sec, "" if sec == 1 else "s"))
+        note("     recorded. Run `cartographer secrets` for the locations.")
+        note("")
     note("Done in %.1fs." % (time.time() - t_start))
     note("  %d nodes, %d edges (%s)"
          % (c["nodes"], c["edges"],
@@ -378,6 +590,86 @@ def cmd_contracts(args):
     return 0
 
 
+def cmd_secrets(args):
+    cfg = cfgmod.load(args.config)
+    st = _open(cfg, create=False)
+    rows = list(st.conn.execute(
+        "SELECT detail, hint FROM gaps WHERE source='secrets' ORDER BY detail"))
+    if not rows:
+        out("No credential-shaped strings found.")
+        out("")
+        out("That is not a guarantee: this looks for common shapes only, and a "
+            "secret in an unusual format will be missed.")
+        st.close()
+        return 0
+    out("Possible credentials in source")
+    out("")
+    out("The VALUES were never read into the graph -- only these locations.")
+    out("Open each line yourself to confirm. If real: rotate it, move it to a")
+    out("secrets manager, and never paste the value into a prompt or a ticket.")
+    out("")
+    for r in rows:
+        out("  %s" % r["detail"])
+    st.close()
+    return 0
+
+
+def cmd_schema(args):
+    cfg = cfgmod.load(args.config)
+    st = _open(cfg, create=False)
+    if args.table:
+        rows = list(st.conn.execute(
+            "SELECT * FROM nodes WHERE kind='table' AND name LIKE ? COLLATE NOCASE",
+            ("%" + args.table + "%",)))
+        if not rows:
+            out("No table matches %r." % args.table)
+            st.close()
+            return 1
+        for n in rows[:20]:
+            _print_table(st, n)
+        st.close()
+        return 0
+
+    shared = list(st.conn.execute(
+        "SELECT detail, hint FROM gaps WHERE category='shared-table' "
+        "ORDER BY detail"))
+    tables = st.conn.execute(
+        "SELECT COUNT(*) n FROM nodes WHERE kind='table'").fetchone()["n"]
+    out("%d tables in the graph." % tables)
+    if shared:
+        out("")
+        out("Tables touched by more than one service -- coupling no API")
+        out("contract documents:")
+        out("")
+        for r in shared:
+            out("  %s" % r["detail"])
+            out("      %s" % r["hint"])
+    else:
+        out("No cross-service table access detected.")
+    st.close()
+    return 0
+
+
+def _print_table(st, n):
+    import json as _json
+    ex = _json.loads(n["extra"] or "{}")
+    out("")
+    out("%s" % n["name"])
+    out("  declared: %s" % (ex.get("declared_at") or
+                            "not found in the repos on disk"))
+    if ex.get("migration_system"):
+        out("  via:      %s migration" % ex["migration_system"])
+    for kind, label in (("defines-table", "owned by"),
+                        ("writes-table", "written by"),
+                        ("reads-table", "read by")):
+        rows = list(st.conn.execute(
+            "SELECT src, evidence FROM edges WHERE dst=? AND kind=?",
+            (n["id"], kind)))
+        for r in rows:
+            out("  %-9s %-16s %s" % (label, r["src"].split(" ", 3)[-1],
+                                     r["evidence"] or ""))
+
+
 def cmd_questions(args):
     cfg = cfgmod.load(args.config)
     st = _open(cfg, create=False)
@@ -509,6 +801,11 @@ def build_parser():
     s.add_argument("--trace", action="append", help="exported APM service-graph file")
     s.add_argument("--skip-history", action="store_true")
     s.add_argument("--skip-symbols", action="store_true")
+    s.add_argument("--skip-sql", action="store_true",
+                   help="skip schema/DDL and DAO SQL analysis")
+    s.add_argument("--skip-secrets", action="store_true",
+                   help="skip credential detection (locations only; values are "
+                        "never recorded either way)")
     s.add_argument("--debug", action="store_true")
     s.set_defaults(func=cmd_scan)
 
@@ -561,6 +858,13 @@ def build_parser():
     s = sub.add_parser("contracts", help="routes and events a service exposes")
     s.add_argument("service", nargs="?")
     s.set_defaults(func=cmd_contracts)
+
+    s = sub.add_parser("secrets", help="possible credentials in source (locations only)")
+    s.set_defaults(func=cmd_secrets)
+
+    s = sub.add_parser("schema", help="tables, owners, and cross-service access")
+    s.add_argument("table", nargs="?", help="inspect one table")
+    s.set_defaults(func=cmd_schema)
 
     s = sub.add_parser("questions", help="what to ask your team")
     s.set_defaults(func=cmd_questions)
