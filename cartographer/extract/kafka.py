@@ -270,7 +270,7 @@ def _owner_for(cfg, repo_root, path, fallback):
     """
     Attribute a file to its Maven module when the repo holds many.
 
-    ong-server-repo/server/<module>/... -- the module directory is the service,
+    <repo>/server/<module>/... -- the module directory is the service,
     not the repo.
     """
     rel = os.path.relpath(path, repo_root).replace(os.sep, "/")

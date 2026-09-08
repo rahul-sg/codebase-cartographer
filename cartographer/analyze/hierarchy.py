@@ -22,7 +22,7 @@ from collections import defaultdict
 # Node kinds that are actors in their own right at estate level. Shared
 # libraries are included deliberately: `framework` and `cache` are compiled
 # into 17 modules, and collapsing them into their repo would both hide that
-# and invent a phantom "ong-server-repo" service.
+# and invent a phantom service named after the repository.
 TOP_KINDS = ("service", "topic", "datastore", "host", "infra", "legacy-page",
              "library")
 # Kinds that live inside a service and get rolled up into it.

@@ -1,14 +1,13 @@
-# Working with cartographer at iTradeNetwork
+# Working with cartographer
 
 Everything from getting the code onto your work laptop to using it well three
 months in.
 
 ---
 
-> **Working on the iTradeNetwork OMS?** Read [ITN-GUIDE.md](ITN-GUIDE.md)
-> alongside this — it covers the stack-specific behaviour (Kafka constants,
-> reactor-excluded modules, the two migration systems, proxy configs) and ships
-> a pre-filled `cartographer.itn.yaml`.
+> A worked example for a large Java/Angular estate — Kafka constants,
+> reactor-excluded modules, two migration systems, SPA proxy configs — is in
+> [`examples/`](examples/), with a pre-filled config you can copy.
 
 ## Part 1 — Getting it onto your work machine
 

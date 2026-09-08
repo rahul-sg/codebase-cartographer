@@ -3,7 +3,7 @@ Configuration loading and service-identity resolution.
 
 The single hardest problem in mapping a microservice estate is not parsing --
 it is deciding that `order-svc`, `orders`, `OrderService`, `ORDER_SERVICE_URL`
-and `oms/order-svc:latest` all name the same thing. That aliasing logic lives
+and `registry/org/order-svc:latest` all name the same thing. That aliasing logic lives
 here so every extractor resolves names identically.
 """
 from __future__ import annotations
@@ -163,7 +163,7 @@ _SUFFIXES = ("service", "svc", "server", "api", "app", "srv", "ms",
              "ui", "web", "frontend", "client", "backend", "gateway")
 
 # Environment suffixes glued onto a service abbreviation, which is how this
-# estate names both hosts and schemas: icrdev / icrsqe / iomsqe / itlsqe.
+# estates name both hosts and schemas: billdev / billsqe / portalsqe.
 _ENV_SUFFIXES = ("dev", "sqe", "uat", "prd", "prod", "qa", "stg", "stage",
                  "test", "local", "int", "perf")
 
@@ -203,7 +203,7 @@ def _token_variants(t):
                 out.add(cand)
                 out |= _token_variants(cand)
 
-    # A bare abbreviation with an environment suffix glued on: icrsqe -> icr.
+    # A bare abbreviation with an environment suffix glued on: billsqe -> bill.
     low_t = t.lower()
     for env in _ENV_SUFFIXES:
         if low_t.endswith(env) and len(low_t) > len(env) + 1:

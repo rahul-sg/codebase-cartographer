@@ -3,7 +3,7 @@ Declared dependencies from build files.
 
 Build manifests are authoritative about what a service depends on -- more so
 than grep -- and they also reveal in-estate dependencies (order-svc depending
-on a shared oms-common library) that no network call would show.
+on a shared internal library) that no network call would show.
 
 Read statically. We never invoke a build tool: that would be slow, would need
 credentials, and could execute arbitrary code from the repository.
@@ -130,7 +130,7 @@ def _known_modules(store):
     """
     Module directories the Maven/build pass already identified.
 
-    Without this, `ong-ui-repo/ui/package.json` would create a service called
+    Without this, `web-repo/ui/package.json` would create a service called
     "ui" and the parent `server/pom.xml` one called "server" -- directory
     names that are not modules at all.
     """

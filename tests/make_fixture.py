@@ -24,8 +24,8 @@ def git(repo, *args):
 def commit(repo, msg, author, date):
     git(repo, "add", "-A")
     env = dict(os.environ)
-    env.update({"GIT_AUTHOR_NAME": author, "GIT_AUTHOR_EMAIL": author.lower().replace(" ", ".") + "@itn.test",
-                "GIT_COMMITTER_NAME": author, "GIT_COMMITTER_EMAIL": author.lower().replace(" ", ".") + "@itn.test",
+    env.update({"GIT_AUTHOR_NAME": author, "GIT_AUTHOR_EMAIL": author.lower().replace(" ", ".") + "@example.test",
+                "GIT_COMMITTER_NAME": author, "GIT_COMMITTER_EMAIL": author.lower().replace(" ", ".") + "@example.test",
                 "GIT_AUTHOR_DATE": date, "GIT_COMMITTER_DATE": date})
     subprocess.run(["git", "commit", "-q", "-m", msg], cwd=repo, check=True,
                    env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -38,9 +38,9 @@ def build(root):
     # ================= order-svc (Java, Spring) =================
     o = os.path.join(root, "order-svc")
     w(o + "/pom.xml", "<project><artifactId>order-svc</artifactId></project>\n")
-    w(o + "/src/main/java/com/itn/oms/order/OrderService.java", '''package com.itn.oms.order;
+    w(o + "/src/main/java/com/acme/shop/order/OrderService.java", '''package com.acme.shop.order;
 
-import com.itn.oms.order.client.PricingClient;
+import com.acme.shop.order.client.PricingClient;
 import org.springframework.kafka.core.KafkaTemplate;
 
 /** Owns the order lifecycle. */
@@ -52,7 +52,7 @@ public class OrderService extends BaseService implements Auditable {
         validateOrder(req);
         Price total = computeTotal(req);
         Order saved = persistOrder(req, total);
-        kafkaTemplate.send("oms.order.submitted", saved.getId());
+        kafkaTemplate.send("shop.order.submitted", saved.getId());
         return saved;
     }
 
@@ -64,11 +64,11 @@ public class OrderService extends BaseService implements Auditable {
     private Order persistOrder(OrderRequest req, Price p) { return null; }
 
     public void cancelOrder(String id) {
-        kafkaTemplate.send("oms.order.cancelled", id);
+        kafkaTemplate.send("shop.order.cancelled", id);
     }
 }
 ''')
-    w(o + "/src/main/java/com/itn/oms/order/client/PricingClient.java", '''package com.itn.oms.order.client;
+    w(o + "/src/main/java/com/acme/shop/order/client/PricingClient.java", '''package com.acme.shop.order.client;
 
 import org.springframework.cloud.openfeign.FeignClient;
 
@@ -77,7 +77,7 @@ public interface PricingClient {
     Price computeTotal(OrderRequest req);
 }
 ''')
-    w(o + "/src/main/java/com/itn/oms/order/OrderController.java", '''package com.itn.oms.order;
+    w(o + "/src/main/java/com/acme/shop/order/OrderController.java", '''package com.acme.shop.order;
 
 import org.springframework.web.bind.annotation.*;
 
@@ -95,20 +95,20 @@ public class OrderController {
 ''')
     w(o + "/src/main/resources/application.yml", '''spring:
   datasource:
-    url: jdbc:postgresql://oms-db:5432/oms
+    url: jdbc:postgresql://shop-db:5432/shop
 PRICING_SERVICE_URL: http://pricing-svc:8080
 CATALOG_SERVICE_HOST: catalog-svc
-INVENTORY_API_URL: http://inventory-api.oms.svc.cluster.local:9090
+INVENTORY_API_URL: http://inventory-api.shop.svc.cluster.local:9090
 NOTIFY_SERVICE_URL: http://notification-svc:8080
 ''')
     # generated code that must be ignored
     w(o + "/target/generated-sources/Gen.java", "public class Gen { public void x() {} }\n")
-    w(o + "/src/main/java/com/itn/oms/order/generated/Stub.java", "public class Stub { public void y() {} }\n")
+    w(o + "/src/main/java/com/acme/shop/order/generated/Stub.java", "public class Stub { public void y() {} }\n")
 
     # ================= pricing-svc (Java) =================
     p = os.path.join(root, "pricing-svc")
     w(p + "/pom.xml", "<project><artifactId>pricing-svc</artifactId></project>\n")
-    w(p + "/src/main/java/com/itn/oms/pricing/PricingEngine.java", '''package com.itn.oms.pricing;
+    w(p + "/src/main/java/com/acme/shop/pricing/PricingEngine.java", '''package com.acme.shop.pricing;
 
 import org.springframework.kafka.annotation.KafkaListener;
 
@@ -119,7 +119,7 @@ public class PricingEngine {
     private Price basePrice(OrderRequest r) { return null; }
     private Price applyDiscounts(Price p) { return p; }
 
-    @KafkaListener(topics = "oms.order.submitted")
+    @KafkaListener(topics = "shop.order.submitted")
     public void onOrderSubmitted(String orderId) {
         recalculate(orderId);
     }
@@ -127,7 +127,7 @@ public class PricingEngine {
     void recalculate(String id) { }
 }
 ''')
-    w(p + "/src/main/resources/application.properties", '''spring.datasource.url=jdbc:postgresql://oms-db:5432/oms
+    w(p + "/src/main/resources/application.properties", '''spring.datasource.url=jdbc:postgresql://shop-db:5432/shop
 catalog.service.url=http://catalog-svc:8080
 ''')
 
@@ -160,7 +160,7 @@ def create_product():
     w(c + "/catalog/consumer.py", '''from kafka import KafkaConsumer
 
 def start():
-    consumer = KafkaConsumer("oms.order.submitted")
+    consumer = KafkaConsumer("shop.order.submitted")
     for msg in consumer:
         handle_order(msg)
 
@@ -170,7 +170,7 @@ def handle_order(msg):
 
     # ================= inventory-api (Go) =================
     i = os.path.join(root, "inventory-api")
-    w(i + "/go.mod", "module github.com/itn/inventory-api\n\ngo 1.21\n")
+    w(i + "/go.mod", "module github.com/acme/inventory-api\n\ngo 1.21\n")
     w(i + "/main.go", '''package main
 
 import "fmt"
@@ -187,7 +187,7 @@ func (s *Stock) Reserve(qty int) error {
 }
 
 func publishReserved(sku string) error {
-    return producer.Publish("oms.inventory.reserved", sku)
+    return producer.Publish("shop.inventory.reserved", sku)
 }
 
 func main() {}
@@ -237,7 +237,7 @@ def match_with_llm(a, b):
 ''')
     w(m + "/ml/consumer.py", '''from kafka import KafkaConsumer
 
-consumer = KafkaConsumer("oms.order.submitted")
+consumer = KafkaConsumer("shop.order.submitted")
 
 def run():
     for m in consumer:
@@ -251,20 +251,20 @@ def enrich(msg):
     w(root + "/docker-compose.yml", '''version: "3"
 services:
   order-svc:
-    image: itn/order-svc:latest
+    image: acme/order-svc:latest
     depends_on:
       - pricing-svc
-      - oms-db
+      - shop-db
   pricing-svc:
-    image: itn/pricing-svc:1.4.2
+    image: acme/pricing-svc:1.4.2
   catalog-svc:
-    image: itn/catalog-svc:latest
+    image: acme/catalog-svc:latest
     depends_on:
       - inventory-api
   inventory-api:
-    image: itn/inventory-api:latest
+    image: acme/inventory-api:latest
   ml-svc:
-    image: itn/ml-svc:latest
+    image: acme/ml-svc:latest
 ''')
     w(root + "/openapi/order-svc.yaml", '''openapi: 3.0.0
 info:
@@ -288,10 +288,10 @@ info:
   title: OMS Events
   version: 1.0.0
 channels:
-  oms.order.submitted:
+  shop.order.submitted:
     publish:
       operationId: publishOrderSubmitted
-  oms.order.cancelled:
+  shop.order.cancelled:
     subscribe:
       operationId: onOrderCancelled
 ''')
@@ -299,7 +299,7 @@ channels:
     # ---- nasty edge cases ----
     w(o + "/vendor/thirdparty/Huge.java", "public class Vendored { }\n")
     w(o + "/node_modules/pkg/index.js", "module.exports = function shouldNotAppear() {};\n")
-    big = os.path.join(o, "src/main/java/com/itn/oms/order/Big.java")
+    big = os.path.join(o, "src/main/java/com/acme/shop/order/Big.java")
     w(big, "public class Big {\n" + ("    // filler line\n" * 60000) + "}\n")
     with open(os.path.join(o, "src/main/resources/blob.bin"), "wb") as fh:
         fh.write(bytes(range(256)) * 500)
@@ -338,17 +338,17 @@ channels:
     isvc = os.path.join(root, "inventory-api")
     msvc = os.path.join(root, "ml-svc")
 
-    OS_J = "src/main/java/com/itn/oms/order/OrderService.java"
-    OC_J = "src/main/java/com/itn/oms/order/OrderController.java"
-    PC_J = "src/main/java/com/itn/oms/order/client/PricingClient.java"
-    PE_J = "src/main/java/com/itn/oms/pricing/PricingEngine.java"
+    OS_J = "src/main/java/com/acme/shop/order/OrderService.java"
+    OC_J = "src/main/java/com/acme/shop/order/OrderController.java"
+    PC_J = "src/main/java/com/acme/shop/order/client/PricingClient.java"
+    PE_J = "src/main/java/com/acme/shop/pricing/PricingEngine.java"
 
     # 1. Strong in-repo coupling: the service and its controller always move
     #    together. A reviewer who knows this asks for both in one PR.
     for k in range(6):
         touch(osvc, OS_J, "// order change %d\n" % k)
         touch(osvc, OC_J, "// controller change %d\n" % k)
-        commit(osvc, "OMS-%d adjust order flow" % (2000 + k),
+        commit(osvc, "TICKET-%d adjust order flow" % (2000 + k),
                "Dana Reyes" if k % 2 else "Sam Okafor",
                "2026-0%d-0%dT09:00:00" % (2 + k % 6, 1 + k))
 
@@ -356,7 +356,7 @@ channels:
     #    order-svc and pricing-svc changes on both sides at once. No static
     #    analysis can see this; only the history shows it.
     for k in range(5):
-        ticket = "OMS-%d" % (3100 + k)
+        ticket = "TICKET-%d" % (3100 + k)
         touch(osvc, PC_J, "// pricing contract %d\n" % k)
         commit(osvc, "%s widen pricing contract" % ticket, "Dana Reyes",
                "2026-0%d-1%dT11:00:00" % (3 + k % 5, 2 + k))
@@ -368,7 +368,7 @@ channels:
     for k in range(9):
         touch(csvc, "catalog/api.py",
               "\n\ndef branchy_%d(x):\n    if x > 1:\n        return 1\n    elif x < 0:\n        return 2\n    return 3\n" % k)
-        commit(csvc, "OMS-%d catalog tweak" % (4000 + k), "Priya Nair",
+        commit(csvc, "TICKET-%d catalog tweak" % (4000 + k), "Priya Nair",
                "2026-0%d-2%dT14:00:00" % (2 + k % 7, k % 9))
 
     # 4. Ordinary background churn elsewhere.
@@ -378,7 +378,7 @@ channels:
                "2026-0%d-0%dT16:00:00" % (2 + k, 5 + k))
     for k in range(3):
         touch(msvc, "ml/matcher.py", "\n# ml %d\n" % k)
-        commit(msvc, "OMS-%d matcher tuning" % (5000 + k), "Rahul Sengupta",
+        commit(msvc, "TICKET-%d matcher tuning" % (5000 + k), "Rahul Sengupta",
                "2026-0%d-1%dT10:00:00" % (4 + k, 4 + k))
     return root
 

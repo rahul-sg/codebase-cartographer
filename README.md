@@ -3,9 +3,10 @@
 A Claude Code plugin and MCP server for mapping a large multi-service codebase
 you did not write.
 
-Built for ramping up on a 15+ microservice order management system. It produces
-the cross-service map that usually exists nowhere, and exposes it to Claude so
-every session starts oriented instead of rediscovering the system from scratch.
+Built for the case where a codebase is too large to hold in your head: many
+services, many repos, no single person who knows how it all connects. It
+produces the cross-service map that usually exists nowhere, and exposes it to
+Claude so every session starts oriented instead of rediscovering the system.
 
 **No dependencies.** Python 3.8+ standard library only — no `pip install`,
 nothing to get approved. **Fully local**: no network calls, ever. Nothing about
@@ -177,8 +178,8 @@ Written to `.cartographer/`:
 - **Credentials in source**: flagged by location, never by value. A test
   asserts the values are absent from `graph.db`.
 
-Working on an iTradeNetwork OMS-shaped estate? See **[ITN-GUIDE.md](ITN-GUIDE.md)**
-and the pre-filled `cartographer.itn.yaml`.
+A worked example for a large Java/Angular microservice estate lives in
+[`examples/`](examples/) — a pre-filled config and a day-to-day guide.
 
 ## Known limits
 

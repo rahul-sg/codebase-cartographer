@@ -238,7 +238,7 @@ def run(store, cfg, repos, progress=None):
             is_compose = "docker-compose" in low_name
             lines = _read_lines(path)
             # In a repo of Maven modules the repo name is far too coarse: every
-            # finding would be attributed to `ong-server-repo` and every schema
+            # finding would be attributed to the repository and every schema
             # would look shared. Resolve the owning module per file.
             me = _module_owner(cfg, repo_root, path, svc_name or repo_name)
             ensure_service(me, repo_name)

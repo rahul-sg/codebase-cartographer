@@ -1,7 +1,7 @@
 """
 Maven multi-module discovery.
 
-The lesson this encodes, learned the hard way on the real OMS: **never trust
+The lesson this encodes, learned the hard way: **never trust
 the parent POM's <modules> list as the service inventory.** Real, deployed
 services can be deliberately excluded from the reactor and built separately.
 On ONG that is `logistics` and `interoperability` -- both live, both missed by

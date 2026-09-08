@@ -26,7 +26,7 @@ SOURCE = "frontend"
 PROXY_NAMES = ("proxy.config.json", "proxy.conf.json", "proxy.config.js",
                "proxy.conf.js", "proxy.config.mjs")
 
-# "/order/": { "target": "https://ongsqe.itradenetwork.net" }
+# "/order/": { "target": "https://api.sqe.internal" }
 PROXY_ENTRY = re.compile(
     r'"(?P<prefix>/[^"]*)"\s*:\s*\{(?P<body>[^{}]*)\}', re.S)
 TARGET = re.compile(r'"target"\s*:\s*"([^"]+)"')
@@ -42,7 +42,11 @@ API_CALL = re.compile(
     r'''\.(?:get|post|put|delete|patch|request)\s*[<(]\s*[^)]*?["'`](/[a-z0-9\-_]+/)''',
     re.I)
 
-SHARED_LIB_HINT = ("@itn/", "@itradenetwork/")
+# Any scoped npm package (@scope/name) is a candidate shared library. Rather
+# than hardcoding one company's scope, drift is reported only when the same
+# package is pinned at different versions in different repos -- which is the
+# actual finding, and works for any organisation.
+SCOPED_PKG = re.compile(r"^@[\w.-]+/")
 
 
 def _files(repo_root, follow=False, exts=None, names=None, cap_bytes=1_500_000):
@@ -129,7 +133,7 @@ def run(store, cfg, repos, progress=None):
                                         "package": d.get("name"),
                                         "version": d.get("version")}})
             for name, ver in deps.items():
-                if name.startswith(SHARED_LIB_HINT):
+                if SCOPED_PKG.match(name):
                     lib_versions.setdefault(name, {})[fe] = (ver, "%s/%s" % (repo_name, rel))
 
         # ---- 2. proxy config: the real dependency declaration -------------
@@ -155,7 +159,7 @@ def run(store, cfg, repos, progress=None):
                 n_prefix += 1
 
                 svc, token = _prefix_to_service(cfg, prefix)
-                # The host itself sometimes names the service (icrsqe -> icr).
+                # The host itself sometimes names the service (billsqe -> bill).
                 if not svc:
                     svc = cfg.resolve_service(host.split(".")[0])
                 if svc:

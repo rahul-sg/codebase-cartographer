@@ -319,12 +319,12 @@ class TestPipeline(unittest.TestCase):
         details = [r["detail"] for r in self.st.conn.execute(
             "SELECT detail FROM gaps WHERE category='shared-datastore'")]
         self.assertTrue(details)
-        self.assertIn("oms-db", details[0])
+        self.assertIn("shop-db", details[0])
 
     def test_unconsumed_topic_flagged(self):
         details = " ".join(r["detail"] for r in self.st.conn.execute(
             "SELECT detail FROM gaps WHERE category='unconsumed-topic'"))
-        self.assertIn("oms.order.cancelled", details)
+        self.assertIn("shop.order.cancelled", details)
 
     def test_topic_consumers_found_across_languages(self):
         cons = {r["dst"].split(" ", 3)[-1] for r in self.st.conn.execute(
@@ -484,7 +484,7 @@ class TestPipeline(unittest.TestCase):
     def test_suggested_questions(self):
         qs = md_report.suggest_questions(self.st)
         self.assertTrue(qs)
-        self.assertTrue(any("oms-db" in q for q in qs))
+        self.assertTrue(any("shop-db" in q for q in qs))
 
 
 # --------------------------------------------------------- MCP + CLI
@@ -731,26 +731,31 @@ class TestRobustness(unittest.TestCase):
 
 
 # ==========================================================================
-# The iTradeNetwork OMS shape: Maven multi-module backend, Kafka topics as
+# The Acme OMS shape: Maven multi-module backend, Kafka topics as
 # enum constants, Angular proxy configs, two migration systems, no ORM.
 # ==========================================================================
 
-_ITN = {}
+_MULTI = {}
 
 
-class TestITNShape(unittest.TestCase):
-    """Conventions confirmed from the real stack reference."""
+class TestEnterpriseShape(unittest.TestCase):
+    """
+    Conventions that break naive tools, on a fixture shaped like a real
+    enterprise estate: a Maven multi-module backend with services excluded
+    from the reactor, Kafka topics as enum constants, SPA proxy configs, two
+    migration systems side by side, and no ORM anywhere.
+    """
 
     @classmethod
     def setUpClass(cls):
-        if _ITN:
+        if _MULTI:
             return
-        import make_itn_fixture
+        import make_multiservice_fixture
         from cartographer.extract import (maven, kafka, frontend, sqlschema,
                                           compose, secrets)
-        tmp = tempfile.mkdtemp(prefix="cart-itn-")
+        tmp = tempfile.mkdtemp(prefix="cart-multi-")
         root = os.path.join(tmp, "ong")
-        make_itn_fixture.build(root)
+        make_multiservice_fixture.build(root)
         cfg_path = os.path.join(tmp, "cartographer.yaml")
         with open(cfg_path, "w") as fh:
             fh.write("roots:\n  - %s\n\nservices:\n" % root)
@@ -759,13 +764,13 @@ class TestITNShape(unittest.TestCase):
                     ("common", "[cmn, cmndev]"), ("company", "[cmny, cmnydev]"),
                     ("comment", "[cmt]"), ("notification", "[notif]"),
                     ("nexus", "[]"), ("agent", "[emailagentdev]"),
-                    ("order-enterprise", "[ome, omsenterprise]"),
-                    ("logistics", "[itl, itlsqe]"),
+                    ("order-legacy", "[ome, legacyorders]"),
+                    ("logistics", "[freight]"),
                     ("interoperability", "[interop]"),
-                    ("contract", "[icr, icrsqe]"), ("inventory", "[inv]"),
-                    ("ong-ui-repo", "[omsnextgen]"),
-                    ("om-angular-repo", "[iom, iomsqe]"),
-                    ("bp-react-repo", "[]")):
+                    ("contract", "[contracts]"), ("inventory", "[inv]"),
+                    ("web-repo", "[omsnextgen]"),
+                    ("portal-repo", "[portal]"),
+                    ("mobile-repo", "[]")):
                 fh.write("  - name: %s\n    aliases: %s\n" % (name, al))
         cfg = C.load(cfg_path)
         triples = [(os.path.basename(r), r, cfg.service_for_repo(os.path.basename(r)))
@@ -785,20 +790,20 @@ class TestITNShape(unittest.TestCase):
         hotspots.compute(st)
         pagerank.compute(st)
         st.commit()
-        _ITN.update(tmp=tmp, root=root, cfg=cfg, cfg_path=cfg_path, st=st,
+        _MULTI.update(tmp=tmp, root=root, cfg=cfg, cfg_path=cfg_path, st=st,
                     stats=stats)
 
     @classmethod
     def tearDownClass(cls):
         try:
-            _ITN["st"].close()
+            _MULTI["st"].close()
         except Exception:
             pass
-        shutil.rmtree(_ITN.get("tmp", ""), ignore_errors=True)
+        shutil.rmtree(_MULTI.get("tmp", ""), ignore_errors=True)
 
     # ---- Maven ---------------------------------------------------------
     def test_services_separated_from_shared_libraries(self):
-        st = _ITN["st"]
+        st = _MULTI["st"]
         libs = {r["name"] for r in st.conn.execute(
             "SELECT name FROM nodes WHERE kind='library' AND extra LIKE '%artifactId%'")}
         svcs = {r["name"] for r in st.conn.execute(
@@ -809,7 +814,7 @@ class TestITNShape(unittest.TestCase):
             self.assertIn(svc, svcs)
 
     def test_modules_outside_reactor_are_found(self):
-        st = _ITN["st"]
+        st = _MULTI["st"]
         details = " ".join(r["detail"] for r in st.conn.execute(
             "SELECT detail FROM gaps WHERE category IN "
             "('module-outside-reactor','module-standalone')"))
@@ -817,35 +822,35 @@ class TestITNShape(unittest.TestCase):
         self.assertIn("interoperability", details)
 
     def test_module_dependency_edges(self):
-        st = _ITN["st"]
+        st = _MULTI["st"]
         n = st.conn.execute(
             "SELECT COUNT(*) n FROM edges WHERE kind='depends-on'").fetchone()["n"]
         self.assertGreater(n, 10)
 
     # ---- Kafka via constants -------------------------------------------
     def test_topics_resolved_from_enum_constants(self):
-        st = _ITN["st"]
+        st = _MULTI["st"]
         topics = {r["name"] for r in st.conn.execute(
             "SELECT name FROM nodes WHERE kind='topic'")}
         self.assertIn("order.submitted", topics,
                       "topic must come from the enum value, not a literal")
 
     def test_listener_is_a_consumer_not_a_producer(self):
-        st = _ITN["st"]
+        st = _MULTI["st"]
         cons = {r["dst"].split(" ", 3)[-1] for r in st.conn.execute(
             "SELECT dst FROM edges WHERE kind='consumed-by'")}
         self.assertIn("notification", cons,
                       "@KafkaListener with a SpEL constant must read as consume")
 
     def test_event_edge_between_services(self):
-        st = _ITN["st"]
+        st = _MULTI["st"]
         pairs = {(r["src"].split()[-1], r["dst"].split()[-1])
                  for r in st.conn.execute(
                      "SELECT src, dst FROM edges WHERE kind='event'")}
         self.assertIn(("order", "notification"), pairs)
 
     def test_constants_file_does_not_reference_itself(self):
-        st = _ITN["st"]
+        st = _MULTI["st"]
         misc = [r for r in st.conn.execute(
             "SELECT src FROM edges WHERE kind IN ('produces','consumed-by') "
             "AND src LIKE '%misc%'")]
@@ -853,43 +858,43 @@ class TestITNShape(unittest.TestCase):
 
     # ---- frontend ------------------------------------------------------
     def test_proxy_config_yields_frontend_to_backend_edges(self):
-        st = _ITN["st"]
+        st = _MULTI["st"]
         pairs = {(r["src"].split()[-1], r["dst"].split()[-1])
                  for r in st.conn.execute(
                      "SELECT src, dst FROM edges WHERE kind='http'")}
-        for expected in (("ong-ui-repo", "order"), ("ong-ui-repo", "catalog"),
-                         ("ong-ui-repo", "logistics"),
-                         ("om-angular-repo", "order")):
+        for expected in (("web-repo", "order"), ("web-repo", "catalog"),
+                         ("web-repo", "logistics"),
+                         ("portal-repo", "order")):
             self.assertIn(expected, pairs, "missing %s" % (expected,))
 
     def test_separate_hosts_recorded(self):
-        st = _ITN["st"]
+        st = _MULTI["st"]
         hosts = {r["name"] for r in st.conn.execute(
             "SELECT name FROM nodes WHERE kind='host'")}
-        self.assertIn("ongsqe.itradenetwork.net", hosts)
-        self.assertIn("itlsqe.itradenetwork.net", hosts)
+        self.assertIn("api.sqe.acme.test", hosts)
+        self.assertIn("logistics.sqe.acme.test", hosts)
 
     def test_react_native_hardcoded_urls(self):
-        st = _ITN["st"]
+        st = _MULTI["st"]
         hosts = {r["name"] for r in st.conn.execute(
             "SELECT name FROM nodes WHERE kind='host'")}
-        self.assertIn("www.itradeorder.com", hosts)
+        self.assertIn("www.example-prod.com", hosts)
 
     def test_coldfusion_surface_detected(self):
-        st = _ITN["st"]
+        st = _MULTI["st"]
         pages = {r["name"] for r in st.conn.execute(
             "SELECT name FROM nodes WHERE kind='legacy-page'")}
         self.assertTrue(any(p.endswith(".cfm") for p in pages), pages)
 
     def test_shared_library_version_drift(self):
-        st = _ITN["st"]
+        st = _MULTI["st"]
         d = " ".join(r["detail"] for r in st.conn.execute(
             "SELECT detail FROM gaps WHERE category='shared-library-version-drift'"))
-        self.assertIn("itn-library2", d)
+        self.assertIn("ui-kit", d)
 
     # ---- schema --------------------------------------------------------
     def test_tables_from_both_migration_systems(self):
-        st = _ITN["st"]
+        st = _MULTI["st"]
         rows = {r["name"]: json.loads(r["extra"] or "{}")
                 for r in st.conn.execute(
                     "SELECT name, extra FROM nodes WHERE kind='table'")}
@@ -899,14 +904,14 @@ class TestITNShape(unittest.TestCase):
         self.assertTrue({"patchlist", "flyway"} <= systems, systems)
 
     def test_table_ownership(self):
-        st = _ITN["st"]
+        st = _MULTI["st"]
         owners = {r["name"]: r["service"] for r in st.conn.execute(
             "SELECT name, service FROM nodes WHERE kind='table'")}
         self.assertEqual(owners.get("T_PURCHASE_ORDER"), "order")
         self.assertEqual(owners.get("T_PRODUCT"), "catalog")
 
     def test_dao_sql_yields_table_access(self):
-        st = _ITN["st"]
+        st = _MULTI["st"]
         acc = {(r["src"].split()[-1], r["dst"].split(" ", 3)[-1], r["kind"])
                for r in st.conn.execute(
                    "SELECT src, dst, kind FROM edges "
@@ -918,21 +923,21 @@ class TestITNShape(unittest.TestCase):
     def test_concatenated_sql_is_parsed(self):
         # ProductDaoImpl builds its SELECT across three string literals joined
         # by `+`; per-literal parsing would never see the JOIN target.
-        st = _ITN["st"]
+        st = _MULTI["st"]
         acc = {(r["src"].split()[-1], r["dst"].split(" ", 3)[-1])
                for r in st.conn.execute(
                    "SELECT src, dst FROM edges WHERE kind='reads-table'")}
         self.assertIn(("catalog", "T_PRODUCT_PRICE"), acc)
 
     def test_shared_table_flagged(self):
-        st = _ITN["st"]
+        st = _MULTI["st"]
         d = " ".join(r["detail"] for r in st.conn.execute(
             "SELECT detail FROM gaps WHERE category='shared-table'"))
         self.assertIn("T_PRODUCT", d)
 
     # ---- compose -------------------------------------------------------
     def test_shared_schema_detected(self):
-        st = _ITN["st"]
+        st = _MULTI["st"]
         d = " ".join(r["detail"] for r in st.conn.execute(
             "SELECT detail FROM gaps WHERE category='shared-schema'"))
         self.assertIn("cmndev", d)
@@ -940,7 +945,7 @@ class TestITNShape(unittest.TestCase):
         self.assertIn("nexus", d)
 
     def test_infra_containers_not_services(self):
-        st = _ITN["st"]
+        st = _MULTI["st"]
         svcs = {r["name"] for r in st.conn.execute(
             "SELECT name FROM nodes WHERE kind='service'")}
         for infra in ("mysqldb", "redis", "kafka"):
@@ -948,7 +953,7 @@ class TestITNShape(unittest.TestCase):
 
     # ---- Spring routes -------------------------------------------------
     def test_class_and_method_mappings_compose(self):
-        st = _ITN["st"]
+        st = _MULTI["st"]
         routes = {r["name"] for r in st.conn.execute(
             "SELECT name FROM nodes WHERE kind='route'")}
         self.assertIn("POST /order/api/v1/purchase-orders", routes)
@@ -958,14 +963,14 @@ class TestITNShape(unittest.TestCase):
 
     # ---- secrets -------------------------------------------------------
     def test_credentials_flagged(self):
-        st = _ITN["st"]
+        st = _MULTI["st"]
         d = " ".join(r["detail"] for r in st.conn.execute(
             "SELECT detail FROM gaps WHERE category='credential-in-source'"))
         self.assertIn("application.properties", d)
 
     def test_secret_values_never_stored_anywhere(self):
         """The load-bearing guarantee: values must not reach the database."""
-        st = _ITN["st"]
+        st = _MULTI["st"]
         st.commit()
         with open(st.path, "rb") as fh:
             raw = fh.read()
@@ -976,22 +981,22 @@ class TestITNShape(unittest.TestCase):
 
     # ---- module attribution --------------------------------------------
     def test_findings_attributed_to_modules_not_the_repo(self):
-        st = _ITN["st"]
+        st = _MULTI["st"]
         owners = {r["src"].split()[-1] for r in st.conn.execute(
             "SELECT src FROM edges WHERE kind='uses-datastore'")}
-        self.assertNotIn("ong-server-repo", owners,
+        self.assertNotIn("backend-repo", owners,
                          "a multi-module repo must attribute per module")
         self.assertTrue({"order", "catalog"} & owners, owners)
 
     # ---- reports still render on this shape -----------------------------
     def test_report_includes_new_sections(self):
-        md = md_report.build(_ITN["st"], _ITN["cfg"])
+        md = md_report.build(_MULTI["st"], _MULTI["cfg"])
         for section in ("Module inventory", "Data ownership",
                         "Possible credentials in source"):
             self.assertIn(section, md)
 
     def test_questions_reference_real_findings(self):
-        qs = " ".join(md_report.suggest_questions(_ITN["st"]))
+        qs = " ".join(md_report.suggest_questions(_MULTI["st"]))
         self.assertTrue(qs.strip())
 
 

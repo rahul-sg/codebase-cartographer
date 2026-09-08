@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-A fixture shaped like the real iTradeNetwork OMS workspace.
+A fixture shaped like the real Acme OMS workspace.
 
 Mirrors the conventions that matter, from the stack reference:
   * 5 sibling repos under one non-repo workspace root
@@ -29,16 +29,16 @@ def build(root):
         shutil.rmtree(root)
     os.makedirs(root)
 
-    S = os.path.join(root, "ong-server-repo")
+    S = os.path.join(root, "backend-repo")
     srv = os.path.join(S, "server")
 
     # ---------------- parent pom: reactor list omits logistics + interop ----
     reactor = ["gcutil", "cache", "kafkautil", "framework", "auth", "misc",
                "common", "catalog", "company", "order", "comment",
-               "notification", "nexus", "agent", "order-enterprise"]
+               "notification", "nexus", "agent", "order-legacy"]
     w(srv + "/pom.xml", """<?xml version="1.0"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0">
-  <groupId>com.itradenetwork</groupId>
+  <groupId>com.acme</groupId>
   <artifactId>omm</artifactId>
   <version>0.0.1</version>
   <packaging>pom</packaging>
@@ -51,15 +51,15 @@ def build(root):
 
     def module_pom(name, deps=(), standalone=False):
         dep_xml = "\n".join(
-            "    <dependency><groupId>com.itradenetwork</groupId>"
+            "    <dependency><groupId>com.acme</groupId>"
             "<artifactId>%s</artifactId><version>0.0.1</version></dependency>" % d
             for d in deps)
         parent = "" if standalone else """  <parent>
-    <groupId>com.itradenetwork</groupId><artifactId>omm</artifactId>
+    <groupId>com.acme</groupId><artifactId>omm</artifactId>
     <version>0.0.1</version>
   </parent>
 """
-        gid = "  <groupId>com.itradenetwork</groupId>\n" if standalone else ""
+        gid = "  <groupId>com.acme</groupId>\n" if standalone else ""
         return """<?xml version="1.0"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0">
 %s%s  <artifactId>%s</artifactId>
@@ -81,7 +81,7 @@ def build(root):
         "notification":     ("notifdev", ("framework", "kafkautil")),
         "nexus":            ("cmndev", ("framework", "cache")),   # shares common's schema
         "agent":            ("emailagentdev", ("framework", "cache")),
-        "order-enterprise": ("omedev", ("framework", "kafkautil")),
+        "order-legacy": ("omedev", ("framework", "kafkautil")),
     }
     outside = {"logistics": "logdev", "interoperability": "intopdev"}
 
@@ -103,8 +103,8 @@ def build(root):
         w("%s/%s/deployHelm/values.yaml" % (srv, svc), "replicaCount: 2\n")
 
     # ---------------- Kafka constants: the enum, not string literals -------
-    w(srv + "/misc/src/main/java/com/itradenetwork/misc/kafka/KafkaConstants.java",
-      """package com.itradenetwork.misc.kafka;
+    w(srv + "/misc/src/main/java/com/acme/misc/kafka/KafkaConstants.java",
+      """package com.acme.misc.kafka;
 
 public class KafkaConstants {
     public enum KafkaTopicName {
@@ -121,8 +121,8 @@ public class KafkaConstants {
     }
 }
 """)
-    w(srv + "/kafkautil/src/main/java/com/itradenetwork/kafkautil/util/TopicNameCreator.java",
-      """package com.itradenetwork.kafkautil.util;
+    w(srv + "/kafkautil/src/main/java/com/acme/kafkautil/util/TopicNameCreator.java",
+      """package com.acme.kafkautil.util;
 
 public class TopicNameCreator {
     public String createTopicName(Object name) { return env + "." + name; }
@@ -130,11 +130,11 @@ public class TopicNameCreator {
 """)
 
     # producers / listeners referencing the enum constants
-    w(srv + "/order/src/main/java/com/itradenetwork/order/OrderService.java",
-      """package com.itradenetwork.order;
+    w(srv + "/order/src/main/java/com/acme/order/OrderService.java",
+      """package com.acme.order;
 
-import com.itradenetwork.misc.kafka.KafkaConstants;
-import com.itradenetwork.kafkautil.util.TopicNameCreator;
+import com.acme.misc.kafka.KafkaConstants;
+import com.acme.kafkautil.util.TopicNameCreator;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 public class OrderService {
@@ -160,23 +160,23 @@ public class OrderService {
     }
 }
 """)
-    w(srv + "/notification/src/main/java/com/itradenetwork/notification/NotificationListener.java",
-      """package com.itradenetwork.notification;
+    w(srv + "/notification/src/main/java/com/acme/notification/NotificationListener.java",
+      """package com.acme.notification;
 
-import com.itradenetwork.misc.kafka.KafkaConstants;
+import com.acme.misc.kafka.KafkaConstants;
 import org.springframework.kafka.annotation.KafkaListener;
 
 public class NotificationListener {
-    @KafkaListener(topics = "#{topicNameCreator.createTopicName(T(com.itradenetwork.misc.kafka.KafkaConstants.KafkaTopicName).ORDER_SUBMITTED)}")
+    @KafkaListener(topics = "#{topicNameCreator.createTopicName(T(com.acme.misc.kafka.KafkaConstants.KafkaTopicName).ORDER_SUBMITTED)}")
     public void onOrderSubmitted(String id) { send(id); }
 
     void send(String id) { }
 }
 """)
-    w(srv + "/company/src/main/java/com/itradenetwork/company/LocationListener.java",
-      """package com.itradenetwork.company;
+    w(srv + "/company/src/main/java/com/acme/company/LocationListener.java",
+      """package com.acme.company;
 
-import com.itradenetwork.misc.kafka.KafkaConstants.KafkaTopicName;
+import com.acme.misc.kafka.KafkaConstants.KafkaTopicName;
 import org.springframework.kafka.annotation.KafkaListener;
 
 public class LocationListener {
@@ -190,8 +190,8 @@ public class LocationListener {
 """)
 
     # ---------------- Spring controllers: class-level + method-level -------
-    w(srv + "/order/src/main/java/com/itradenetwork/order/OrderController.java",
-      """package com.itradenetwork.order;
+    w(srv + "/order/src/main/java/com/acme/order/OrderController.java",
+      """package com.acme.order;
 
 import org.springframework.web.bind.annotation.*;
 
@@ -209,8 +209,8 @@ public class OrderController {
     public void cancel(@PathVariable String id) { }
 }
 """)
-    w(srv + "/catalog/src/main/java/com/itradenetwork/catalog/CatalogController.java",
-      """package com.itradenetwork.catalog;
+    w(srv + "/catalog/src/main/java/com/acme/catalog/CatalogController.java",
+      """package com.acme.catalog;
 
 import org.springframework.web.bind.annotation.*;
 
@@ -223,12 +223,12 @@ public class CatalogController {
 """)
 
     # ---------------- DAOs: the three-file convention, raw SQL -------------
-    w(srv + "/catalog/src/main/java/com/itradenetwork/catalog/dao/ProductDaoImpl.java",
-      """package com.itradenetwork.catalog.dao;
+    w(srv + "/catalog/src/main/java/com/acme/catalog/dao/ProductDaoImpl.java",
+      """package com.acme.catalog.dao;
 
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.cache.annotation.Cacheable;
-import com.itradenetwork.cache.annotation.RedisCacheable;
+import com.acme.cache.annotation.RedisCacheable;
 
 public class ProductDaoImpl implements ProductDao {
     private NamedParameterJdbcTemplate namedParameterJdbcTemplate;
@@ -247,13 +247,13 @@ public class ProductDaoImpl implements ProductDao {
     }
 }
 """)
-    w(srv + "/catalog/src/main/java/com/itradenetwork/catalog/dao/ProductRowMapper.java",
-      "package com.itradenetwork.catalog.dao;\npublic class ProductRowMapper { }\n")
-    w(srv + "/catalog/src/main/java/com/itradenetwork/catalog/dao/ProductDao.java",
-      "package com.itradenetwork.catalog.dao;\npublic interface ProductDao { }\n")
+    w(srv + "/catalog/src/main/java/com/acme/catalog/dao/ProductRowMapper.java",
+      "package com.acme.catalog.dao;\npublic class ProductRowMapper { }\n")
+    w(srv + "/catalog/src/main/java/com/acme/catalog/dao/ProductDao.java",
+      "package com.acme.catalog.dao;\npublic interface ProductDao { }\n")
     # a second service reading the SAME table -> hidden data coupling
-    w(srv + "/order/src/main/java/com/itradenetwork/order/dao/OrderProductDaoImpl.java",
-      """package com.itradenetwork.order.dao;
+    w(srv + "/order/src/main/java/com/acme/order/dao/OrderProductDaoImpl.java",
+      """package com.acme.order.dao;
 
 import org.springframework.jdbc.core.JdbcTemplate;
 
@@ -307,7 +307,7 @@ openai.api.key=sk-proj-NOTAREALKEYbutShapedLikeOne1234567890
       "oracle.enable=true\noracle.jndi=java:/jdbc/tpcom\n")
 
     # ---------------- devops ----------------------------------------------
-    D = os.path.join(root, "ong-devops")
+    D = os.path.join(root, "devops-repo")
     w(D + "/local/docker-compose.yml", """version: "3"
 services:
   mysqldb:
@@ -336,29 +336,29 @@ services:
     environment:
       - db_uri=jdbc:mysql://mysqldb:3306/ctlgdev
   ome:
-    image: gcr.io/dev-sqe-uat/order-enterprise
+    image: gcr.io/dev-sqe-uat/order-legacy
     environment:
       - db_uri=jdbc:mysql://mysqldb:3306/omedev
 """)
 
     # ---------------- frontends -------------------------------------------
-    U = os.path.join(root, "ong-ui-repo")
+    U = os.path.join(root, "web-repo")
     w(U + "/ui/package.json",
-      '{"name":"omsnextgen-ui","version":"19.26.150",'
-      '"dependencies":{"@angular/core":"19.2.14","@itn/itn-library2":"19.2609.1","@ngrx/store":"19.0.0"}}')
+      '{"name":"web-app","version":"19.26.150",'
+      '"dependencies":{"@angular/core":"19.2.14","@acme/ui-kit":"19.2609.1","@ngrx/store":"19.0.0"}}')
     w(U + "/ui/proxy.config.json", """{
-  "/common/": { "target": "https://ongsqe.itradenetwork.net", "secure": false },
-  "/order/":  { "target": "https://ongsqe.itradenetwork.net", "secure": false },
-  "/catalog/": { "target": "https://ongsqe.itradenetwork.net" },
-  "/company/": { "target": "https://ongsqe.itradenetwork.net" },
-  "/comment/": { "target": "https://ongsqe.itradenetwork.net" },
-  "/notification/": { "target": "https://ongsqe.itradenetwork.net" },
-  "/omsenterprise/": { "target": "https://ongsqe.itradenetwork.net" },
-  "/agent/": { "target": "https://ongsqe.itradenetwork.net" },
-  "/logistics/": { "target": "https://itlsqe.itradenetwork.net" },
-  "/contract/v1/": { "target": "https://icrsqe.itradenetwork.net" },
-  "/interoperability/": { "target": "https://ongsqe.itradenetwork.net" },
-  "/rfq-agent/": { "target": "https://imlsqe.itradenetwork.net" }
+  "/common/": { "target": "https://api.sqe.acme.test", "secure": false },
+  "/order/":  { "target": "https://api.sqe.acme.test", "secure": false },
+  "/catalog/": { "target": "https://api.sqe.acme.test" },
+  "/company/": { "target": "https://api.sqe.acme.test" },
+  "/comment/": { "target": "https://api.sqe.acme.test" },
+  "/notification/": { "target": "https://api.sqe.acme.test" },
+  "/legacyorders/": { "target": "https://api.sqe.acme.test" },
+  "/agent/": { "target": "https://api.sqe.acme.test" },
+  "/logistics/": { "target": "https://logistics.sqe.acme.test" },
+  "/contract/v1/": { "target": "https://contracts.sqe.acme.test" },
+  "/interoperability/": { "target": "https://api.sqe.acme.test" },
+  "/rfq-agent/": { "target": "https://agents.sqe.acme.test" }
 }""")
     w(U + "/ui/src/app/core/utils/sso.util.ts", """
 export const LOGON = 'secure/login/logon.cfm';
@@ -375,30 +375,30 @@ export class CommonService {
 }
 """)
 
-    A = os.path.join(root, "om-angular-repo")
+    A = os.path.join(root, "portal-repo")
     w(A + "/OrderAndStock/package.json",
       '{"name":"order-and-stoc","version":"0.0.1",'
-      '"dependencies":{"@angular/core":"16.2.12","@itn/itn-library2":"16.24.527"}}')
+      '"dependencies":{"@angular/core":"16.2.12","@acme/ui-kit":"16.24.527"}}')
     w(A + "/OrderAndStock/proxy.config.json", """{
-  "/common/": { "target": "https://iomsqe.itradenetwork.net" },
-  "/order/": { "target": "https://iomsqe.itradenetwork.net" },
-  "/catalog/": { "target": "https://iomsqe.itradenetwork.net" },
-  "/inventory/": { "target": "https://iomsqe.itradenetwork.net" }
+  "/common/": { "target": "https://portal.sqe.acme.test" },
+  "/order/": { "target": "https://portal.sqe.acme.test" },
+  "/catalog/": { "target": "https://portal.sqe.acme.test" },
+  "/inventory/": { "target": "https://portal.sqe.acme.test" }
 }""")
 
-    R = os.path.join(root, "bp-react-repo")
+    R = os.path.join(root, "mobile-repo")
     w(R + "/OrderAndStock/package.json",
       '{"name":"OrderAndStock","version":"0.0.1",'
       '"dependencies":{"react-native":"0.80.0","react":"19.1.0"}}')
     w(R + "/OrderAndStock/src/utils/url.js", """
-export const DEV_BASE_URL = 'https://ongsqe.itradenetwork.net';
-export const PROD_BASE_URL = 'https://www.itradeorder.com';
-export const QMS_BASE_URL = 'https://qmssqe.itradenetwork.net';
+export const DEV_BASE_URL = 'https://api.sqe.acme.test';
+export const PROD_BASE_URL = 'https://www.example-prod.com';
+export const QMS_BASE_URL = 'https://qms.sqe.acme.test';
 export const ANDROID_EMULATOR = 'http://10.0.2.2:9480';
 """)
 
-    for repo in ("ong-server-repo", "ong-ui-repo", "om-angular-repo",
-                 "bp-react-repo", "ong-devops"):
+    for repo in ("backend-repo", "web-repo", "portal-repo",
+                 "mobile-repo", "devops-repo"):
         d = os.path.join(root, repo)
         subprocess.run(["git", "init", "-q"], cwd=d)
         subprocess.run(["git", "config", "user.email", "t@t"], cwd=d)
@@ -409,7 +409,7 @@ export const ANDROID_EMULATOR = 'http://10.0.2.2:9480';
                    GIT_COMMITTER_EMAIL="d@itn.test",
                    GIT_AUTHOR_DATE="2026-03-01T10:00:00",
                    GIT_COMMITTER_DATE="2026-03-01T10:00:00")
-        subprocess.run(["git", "commit", "-qm", "OMSR-1000 initial"], cwd=d,
+        subprocess.run(["git", "commit", "-qm", "TICKET-1000 initial"], cwd=d,
                        env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return root
 
