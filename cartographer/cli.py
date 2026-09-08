@@ -201,7 +201,10 @@ def _brief(d):
                     if isinstance(v, (int, float)) and v)
 
 
-def _write_reports(st, cfg):
+JSON_EXPORT_NODE_LIMIT = 20000
+
+
+def _write_reports(st, cfg, force_json=False):
     cfg.ensure_out()
     with open(cfg.out("GRAPH_REPORT.md"), "w", encoding="utf-8") as fh:
         fh.write(md_report.build(st, cfg))
@@ -209,11 +212,20 @@ def _write_reports(st, cfg):
         fh.write(html_report.build(st))
     with open(cfg.out("topology.mmd"), "w", encoding="utf-8") as fh:
         fh.write(mermaid.service_graph(st))
-    # A JSON export, so other tools (and your own scripts) can consume it.
-    data = {"nodes": [dict(r) for r in st.conn.execute("SELECT * FROM nodes")],
-            "edges": [dict(r) for r in st.conn.execute("SELECT * FROM edges")]}
-    with open(cfg.out("graph.json"), "w", encoding="utf-8") as fh:
-        json.dump(data, fh, indent=1, default=str)
+
+    # The JSON export is for other tools and your own scripts. On a large
+    # estate it runs to tens of megabytes and almost nobody reads it, so it is
+    # skipped past a threshold -- graph.db holds the same data and is queryable.
+    n = st.counts()["nodes"]
+    if force_json or n <= JSON_EXPORT_NODE_LIMIT:
+        data = {"nodes": [dict(r) for r in st.conn.execute("SELECT * FROM nodes")],
+                "edges": [dict(r) for r in st.conn.execute("SELECT * FROM edges")]}
+        with open(cfg.out("graph.json"), "w", encoding="utf-8") as fh:
+            json.dump(data, fh, indent=1, default=str)
+        return True
+    note("  (skipped graph.json: %d nodes -- use `cartographer report --json` "
+         "if you want it)" % n)
+    return False
 
 
 # ---------------------------------------------------------------- queries
@@ -381,9 +393,12 @@ def cmd_questions(args):
 def cmd_report(args):
     cfg = cfgmod.load(args.config)
     st = _open(cfg, create=False)
-    _write_reports(st, cfg)
+    wrote_json = _write_reports(st, cfg, force_json=args.json)
     note("Wrote:")
-    for f in ("GRAPH_REPORT.md", "graph.html", "topology.mmd", "graph.json"):
+    files = ["GRAPH_REPORT.md", "graph.html", "topology.mmd"]
+    if wrote_json:
+        files.append("graph.json")
+    for f in files:
         note("  %s" % cfg.out(f))
     st.close()
     return 0
@@ -551,6 +566,8 @@ def build_parser():
     s.set_defaults(func=cmd_questions)
 
     s = sub.add_parser("report", help="regenerate reports from the graph")
+    s.add_argument("--json", action="store_true",
+                   help="always write graph.json, however large")
     s.set_defaults(func=cmd_report)
 
     s = sub.add_parser("stats", help="what is in the graph")

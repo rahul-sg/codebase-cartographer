@@ -371,6 +371,30 @@ you *where*; only reading tells you *what*.
 
 ---
 
+## Part 8b — What to expect at your scale
+
+Measured on a synthetic 15-service, 3,300-file Java estate (28 MB of source),
+which is roughly the shape of an OMS:
+
+| Operation | Time |
+|---|---|
+| Full `scan` (symbols, topology, specs, builds, history, PageRank) | ~17 s |
+| `topology`, `questions`, `hotspots`, `find`, `impact` | under 0.3 s |
+| `map "<task>"` (recomputes personalised PageRank) | ~3 s |
+| Graph size | 39.6k nodes, 92k edges, 70 MB `graph.db` |
+
+So: scan once in the morning or after a big pull, and every query after that is
+effectively instant. The interactive HTML caps at the 1,200 most central nodes
+so the browser stays responsive; `graph.json` is skipped above 20k nodes
+(`cartographer report --json` forces it) because `graph.db` holds the same data
+and is queryable with plain `sqlite3`.
+
+If a scan is ever too slow: `--skip-history` for a quick structural pass, or
+set `defaults.call_edges: false` to drop symbol-level call inference, which is
+where most of the time goes.
+
+---
+
 ## Part 9 — Extending it
 
 The design is deliberately additive: each extractor writes into one SQLite
