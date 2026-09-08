@@ -24,7 +24,7 @@ GitHub repo (private), or your company's Bitbucket if you are comfortable
 having it there. It contains no company code, only tooling.
 
 ```bash
-cd ~/Desktop/My-Documents/Programming/Personal\ Projects/oms-cartographer
+cd ~/Desktop/My-Documents/Programming/Personal\ Projects/codebase-cartographer
 git remote add origin <your-remote>
 git push -u origin main
 ```
@@ -32,7 +32,7 @@ git push -u origin main
 Then on the work machine:
 
 ```bash
-git clone <your-remote> ~/tools/cartographer
+git clone <your-remote> ~/tools/codebase-cartographer
 ```
 
 ### Option B — no remote
@@ -41,7 +41,7 @@ Zip it and move it however you normally move files.
 
 ```bash
 cd ~/Desktop/My-Documents/Programming/Personal\ Projects
-zip -r cartographer.zip oms-cartographer -x '*/.git/*' '*/__pycache__/*'
+zip -r cartographer.zip codebase-cartographer -x '*/.git/*' '*/__pycache__/*'
 ```
 
 `claude --plugin-dir` accepts a `.zip` directly, so you do not even have to
@@ -50,7 +50,7 @@ unpack it to try it.
 ### First checks on the work machine
 
 ```bash
-cd ~/tools/cartographer
+cd ~/tools/codebase-cartographer
 python3 --version          # need 3.8+; every corporate Mac and Linux box has it
 python3 tests/test_all.py  # 71 tests, ~6 seconds, proves the install is sound
 ./bin/cartographer doctor
@@ -66,7 +66,7 @@ verification story — no dependencies means nothing else can be missing.
 ### Try it for one session (start here)
 
 ```bash
-claude --plugin-dir ~/tools/cartographer
+claude --plugin-dir ~/tools/codebase-cartographer
 ```
 
 Installs nothing, modifies nothing, disappears when you close the session.
@@ -74,7 +74,7 @@ Installs nothing, modifies nothing, disappears when you close the session.
 ### Make it permanent
 
 ```bash
-cp -r ~/tools/cartographer ~/.claude/skills/cartographer
+cp -r ~/tools/codebase-cartographer ~/.claude/skills/cartographer
 ```
 
 A plugin in your skills directory auto-loads on the next session as

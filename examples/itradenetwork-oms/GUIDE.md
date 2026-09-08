@@ -10,15 +10,15 @@ layer on top of it.
 
 ```bash
 # 1. get the tool onto the work machine
-git clone <your-remote> ~/tools/cartographer
-cd ~/tools/cartographer && python3 tests/test_all.py     # 96 tests, ~7s
+git clone <your-remote> ~/tools/codebase-cartographer
+cd ~/tools/codebase-cartographer && python3 tests/test_all.py     # 96 tests, ~7s
 
 # 2. use the pre-filled config (all 25 modules, schemas, aliases already in it)
 cp cartographer.itn.yaml /Users/rsengupta/projects/ong/cartographer.yaml
 
 # 3. cross-check it against the actual repos
 cd /Users/rsengupta/projects/ong
-~/tools/cartographer/bin/cartographer init --root . --dir /tmp/check
+~/tools/codebase-cartographer/bin/cartographer init --root . --dir /tmp/check
 diff <(grep 'name:' cartographer.yaml) <(grep 'name:' /tmp/check/cartographer.yaml)
 #    init reads the real repos. Anything it finds that the pre-filled config
 #    lacks is drift since the reference was written -- trust init.
@@ -32,7 +32,7 @@ cartographer secrets
 cartographer schema
 ```
 
-Add to Claude Code with `claude --plugin-dir ~/tools/cartographer`.
+Add to Claude Code with `claude --plugin-dir ~/tools/codebase-cartographer`.
 
 ---
 

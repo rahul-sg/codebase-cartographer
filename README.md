@@ -38,14 +38,29 @@ boundary.
 ## Install
 
 ```bash
-git clone <your-repo> ~/tools/cartographer
-claude --plugin-dir ~/tools/cartographer      # one session, installs nothing
+unzip codebase-cartographer.zip -d ~/tools     # or: git clone <your-repo>
+cd ~/tools/codebase-cartographer
+./install.sh                                    # verify it runs here (~10s)
 ```
+
+Nothing is fetched and nothing is installed with a package manager — the tool
+is Python standard library only. `./install.sh --link` adds it to your PATH;
+`./install.sh --plugin` installs it as an always-on Claude Code plugin.
+
+For one session, installing nothing:
+
+```bash
+claude --plugin-dir ~/tools/codebase-cartographer
+```
+
+**Setting this up with Claude?** Point it at
+[`SETUP-FOR-CLAUDE.md`](SETUP-FOR-CLAUDE.md) — an ordered runbook with a check
+after every step.
 
 Once it earns its place:
 
 ```bash
-cp -r ~/tools/cartographer ~/.claude/skills/cartographer
+cp -r ~/tools/codebase-cartographer ~/.claude/skills/cartographer
 ```
 
 Plugins in your skills directory auto-load on the next session. **Your existing
