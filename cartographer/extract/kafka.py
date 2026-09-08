@@ -26,7 +26,7 @@ import os
 import re
 
 from .. import ids, langs
-from ..config import SKIP_DIRS
+from ..config import SKIP_DIRS, prune
 
 SOURCE = "kafka"
 
@@ -66,8 +66,7 @@ def _read(path, limit=1_500_000):
 
 def _java_files(repo_root, follow=False):
     for dirpath, dirnames, filenames in os.walk(repo_root, followlinks=follow):
-        dirnames[:] = [d for d in dirnames
-                       if d not in SKIP_DIRS and not d.startswith(".")]
+        prune(dirpath, dirnames)
         for fn in sorted(filenames):
             if fn.endswith((".java", ".kt", ".scala", ".groovy")):
                 yield os.path.join(dirpath, fn)

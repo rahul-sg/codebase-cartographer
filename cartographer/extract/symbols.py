@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 
 from .. import ids, langs
-from ..config import SKIP_DIRS, GENERATED_HINTS
+from ..config import SKIP_DIRS, GENERATED_HINTS, prune
 
 SOURCE = "symbols"
 
@@ -27,8 +27,7 @@ def _is_generated(path):
 
 def iter_source_files(repo_root, max_bytes, follow_symlinks=False):
     for dirpath, dirnames, filenames in os.walk(repo_root, followlinks=follow_symlinks):
-        dirnames[:] = [d for d in dirnames
-                       if d not in SKIP_DIRS and not d.startswith(".")]
+        prune(dirpath, dirnames)
         for fn in sorted(filenames):
             p = os.path.join(dirpath, fn)
             lang = langs.lang_of(fn)

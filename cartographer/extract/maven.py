@@ -22,7 +22,7 @@ import re
 import xml.etree.ElementTree as ET
 
 from .. import ids
-from ..config import SKIP_DIRS
+from ..config import SKIP_DIRS, prune
 
 SOURCE = "maven"
 
@@ -54,8 +54,7 @@ def find_poms(root, follow=False, max_depth=6):
         if dirpath.rstrip(os.sep).count(os.sep) - base > max_depth:
             dirnames[:] = []
             continue
-        dirnames[:] = [d for d in dirnames
-                       if d not in SKIP_DIRS and not d.startswith(".")]
+        prune(dirpath, dirnames)
         if "pom.xml" in filenames:
             out.append(os.path.join(dirpath, "pom.xml"))
     return sorted(out)

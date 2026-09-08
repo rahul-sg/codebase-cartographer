@@ -325,12 +325,79 @@ def _has_source(path, max_depth=3):
         if dirpath.rstrip(os.sep).count(os.sep) - base > max_depth:
             dirnames[:] = []
             continue
-        dirnames[:] = [d for d in dirnames
-                       if d not in SKIP_DIRS and not d.startswith(".")]
+        prune(dirpath, dirnames)
         for fn in filenames:
             if fn.lower().endswith(_SOURCE_EXT):
                 return True
     return False
+
+
+# Directories already covered by another scan target. Set once per scan; every
+# extractor's walk honours it, so scanning a workspace root does not re-walk
+# the repos inside it and duplicate every node under a second label.
+_PRUNED = set()
+
+
+def set_pruned(paths):
+    global _PRUNED
+    _PRUNED = {os.path.realpath(p) for p in (paths or [])}
+
+
+def prune(dirpath, dirnames):
+    """
+    In-place dirnames filter for os.walk. Drops build noise, dotfiles, and any
+    directory already being scanned as its own target.
+
+        for dp, dn, fn in os.walk(root):
+            prune(dp, dn)
+    """
+    keep = []
+    for d in dirnames:
+        if d in SKIP_DIRS or d.startswith("."):
+            continue
+        if _PRUNED:
+            try:
+                if os.path.realpath(os.path.join(dirpath, d)) in _PRUNED:
+                    continue
+            except OSError:
+                pass
+        keep.append(d)
+    dirnames[:] = keep
+    return dirnames
+
+
+def orphan_roots(roots, repos):
+    """
+    Configured roots that hold content outside any discovered repository.
+
+    A workspace root is usually not itself a git repo, and useful things live
+    beside the repos -- a top-level `database/` directory, a shared `openapi/`
+    folder, a parent POM that ties sibling checkouts together. Without this
+    they are simply never scanned, and the omission is silent.
+
+    Returns [(label, path)] with `exclude` handled by the caller walking from
+    the root and skipping the repo directories it already covered.
+    """
+    out = []
+    repo_real = {os.path.realpath(r) for r in repos}
+    for root in roots:
+        root = _expand(root)
+        if not os.path.isdir(root):
+            continue
+        if os.path.realpath(root) in repo_real:
+            continue                      # the root IS a repo; already covered
+        try:
+            entries = [e for e in os.scandir(root)
+                       if not e.name.startswith(".")
+                       and e.name not in SKIP_DIRS]
+        except OSError:
+            continue
+        has_orphan = any(
+            e.is_file() or (e.is_dir() and os.path.realpath(e.path) not in repo_real)
+            for e in entries)
+        if has_orphan:
+            out.append((os.path.basename(root.rstrip(os.sep)) or "workspace", root))
+    return out
 
 
 def discover_repos(roots, max_depth=4, follow_symlinks=False):

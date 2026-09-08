@@ -21,7 +21,7 @@ import os
 import re
 
 from .. import ids
-from ..config import SKIP_DIRS
+from ..config import SKIP_DIRS, prune
 
 SOURCE = "sqlschema"
 
@@ -73,8 +73,7 @@ def _read(p, limit=4_000_000):
 
 def _walk(repo_root, exts, follow=False):
     for dirpath, dirnames, filenames in os.walk(repo_root, followlinks=follow):
-        dirnames[:] = [d for d in dirnames
-                       if d not in SKIP_DIRS and not d.startswith(".")]
+        prune(dirpath, dirnames)
         for fn in sorted(filenames):
             if fn.endswith(exts):
                 yield os.path.join(dirpath, fn)

@@ -5,14 +5,15 @@ The stack reference calls for this explicitly, having found a hardcoded
 Confluent Cloud SASL credential in `agent/src/main/resources/application.properties`
 and deliberately not recording its value anywhere.
 
-This module follows the same rule, structurally rather than by good intentions:
+This module follows the same rule structurally rather than by good intentions:
 the matched secret is never written to the graph, never returned, and never
-logged. Only the file, the line, and the KIND of secret are recorded. A
-fingerprint (first 8 hex of a salted SHA-256) is kept so the same finding can be
-recognised across scans without the value being recoverable from the database.
+logged. Only the file, the line, and the KIND of secret are recorded.
 
-The salt is random per scan, so fingerprints are stable within one graph and
-meaningless outside it.
+A short fingerprint (8 hex of a SHA-256 salted with a fresh random value each
+scan) is kept purely to deduplicate: the same credential appearing in five
+files is reported once. It deliberately does NOT survive across scans -- a
+stable hash of a secret is an offline oracle for testing guesses against, which
+is exactly the property we do not want in a file that gets committed or shared.
 """
 from __future__ import annotations
 
@@ -21,7 +22,7 @@ import os
 import re
 import secrets as _pysecrets
 
-from ..config import SKIP_DIRS
+from ..config import SKIP_DIRS, prune
 
 SOURCE = "secrets"
 
@@ -86,8 +87,7 @@ def _fingerprint(value, salt):
 
 def _walk(repo_root, follow=False, cap=2_000_000):
     for dirpath, dirnames, filenames in os.walk(repo_root, followlinks=follow):
-        dirnames[:] = [d for d in dirnames
-                       if d not in SKIP_DIRS and not d.startswith(".")]
+        prune(dirpath, dirnames)
         for fn in sorted(filenames):
             if fn.endswith(SCAN_EXT) or fn in SCAN_NAMES or fn.startswith(".env"):
                 p = os.path.join(dirpath, fn)

@@ -12,7 +12,7 @@ import os
 import re
 
 from .. import ids, miniyaml
-from ..config import SKIP_DIRS
+from ..config import SKIP_DIRS, prune
 
 SOURCE = "specs"
 
@@ -42,8 +42,7 @@ def _load(path):
 
 def _candidates(repo_root, follow=False):
     for dirpath, dirnames, filenames in os.walk(repo_root, followlinks=follow):
-        dirnames[:] = [d for d in dirnames
-                       if d not in SKIP_DIRS and not d.startswith(".")]
+        prune(dirpath, dirnames)
         for fn in sorted(filenames):
             low = fn.lower()
             if low.endswith(SPEC_EXT) or low.endswith(".proto"):

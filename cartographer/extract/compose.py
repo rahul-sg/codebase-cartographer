@@ -15,7 +15,7 @@ import os
 import re
 
 from .. import ids, miniyaml
-from ..config import SKIP_DIRS
+from ..config import SKIP_DIRS, prune
 
 SOURCE = "compose"
 
@@ -41,8 +41,7 @@ def _is_infra(container_name, image):
 
 def _find(root, follow=False):
     for dirpath, dirnames, filenames in os.walk(root, followlinks=follow):
-        dirnames[:] = [d for d in dirnames
-                       if d not in SKIP_DIRS and not d.startswith(".")]
+        prune(dirpath, dirnames)
         for fn in sorted(filenames):
             if COMPOSE_NAME.match(fn):
                 yield os.path.join(dirpath, fn)

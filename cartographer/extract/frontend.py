@@ -19,7 +19,7 @@ import os
 import re
 
 from .. import ids
-from ..config import SKIP_DIRS
+from ..config import SKIP_DIRS, prune
 
 SOURCE = "frontend"
 
@@ -47,8 +47,7 @@ SHARED_LIB_HINT = ("@itn/", "@itradenetwork/")
 
 def _files(repo_root, follow=False, exts=None, names=None, cap_bytes=1_500_000):
     for dirpath, dirnames, filenames in os.walk(repo_root, followlinks=follow):
-        dirnames[:] = [d for d in dirnames
-                       if d not in SKIP_DIRS and not d.startswith(".")]
+        prune(dirpath, dirnames)
         for fn in sorted(filenames):
             if names and fn in names:
                 yield os.path.join(dirpath, fn)

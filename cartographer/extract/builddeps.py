@@ -15,7 +15,7 @@ import os
 import re
 
 from .. import ids
-from ..config import SKIP_DIRS
+from ..config import SKIP_DIRS, prune
 
 SOURCE = "builddeps"
 
@@ -46,8 +46,7 @@ def _read(p, limit=2_000_000):
 
 def _manifests(repo_root, follow=False):
     for dirpath, dirnames, filenames in os.walk(repo_root, followlinks=follow):
-        dirnames[:] = [d for d in dirnames
-                       if d not in SKIP_DIRS and not d.startswith(".")]
+        prune(dirpath, dirnames)
         for fn in filenames:
             if fn in MANIFESTS or fn.endswith(".csproj"):
                 yield os.path.join(dirpath, fn)

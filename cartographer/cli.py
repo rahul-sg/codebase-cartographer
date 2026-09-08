@@ -48,6 +48,21 @@ def _repos_for(cfg, only=None):
         if only and name not in only and svc not in only:
             continue
         triples.append((name, r, svc))
+
+    # Content that sits in the workspace but inside no repository -- a
+    # top-level database/ tree, a shared openapi/ folder, a parent POM above
+    # sibling checkouts -- would otherwise never be scanned, silently.
+    if not only:
+        repo_paths = [x[1] for x in triples]
+        for label, path in cfgmod.orphan_roots(cfg.roots, repo_paths):
+            if os.path.realpath(path) in seen:
+                continue
+            seen.add(os.path.realpath(path))
+            triples.append((label, path, cfg.service_for_repo(label) or label))
+        # Every repo is scanned as its own target, so walking the workspace
+        # root must skip them -- otherwise every file is discovered twice under
+        # two different repo labels, doubling the graph and the runtime.
+        cfgmod.set_pruned(repo_paths)
     return triples
 
 
