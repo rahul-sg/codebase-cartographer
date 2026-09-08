@@ -23,8 +23,8 @@ summary and the guardrails.
 1. **Find the tool.** If the user mentions a zip, look in `~/Downloads`,
    `~/Desktop` and the working directory. Unpack to `~/tools/`.
 2. **Verify it runs:** `./install.sh` — checks Python 3.8+, checks git, fixes
-   the executable bit, runs 120 tests against synthetic codebases it builds
-   itself. If the tests fail, stop and show the user
+   the executable bit, runs the full test suite against synthetic codebases it
+   builds itself. If the tests fail, stop and show the user
    `/tmp/cartographer-tests.log`. A broken tool produces a wrong map, which is
    worse than no map.
 3. **Ask where the repos live.** The tool wants the directory that *contains*

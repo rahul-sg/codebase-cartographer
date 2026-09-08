@@ -50,7 +50,8 @@ This checks Python 3.8+, checks git, fixes the executable bit (some transfers
 drop it), and runs the full test suite against two synthetic codebases it
 builds itself.
 
-**Check:** the output ends with `Ran 116 tests` and `ok`.
+**Check:** the output ends with `Ran <N> tests` and `OK`, and every
+line above it starts with `ok`.
 
 **If Python is missing:** stop and tell the user. Do not try to install
 Python; that is a machine-policy decision, not yours.
@@ -139,7 +140,7 @@ cartographer stats        # does the service count match what they expect?
 cartographer topology     # are there service-to-service edges at all?
 cartographer schema       # tables found? any shared by 2+ services?
 cartographer questions    # what the scan could not determine
-cartographer coverage 2>/dev/null || true
+cartographer secrets      # credential LOCATIONS only
 ```
 
 Interpret honestly:

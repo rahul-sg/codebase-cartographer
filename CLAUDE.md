@@ -31,10 +31,10 @@ When only some repos are present, say "among the repos I can see".
 ```
 bin/cartographer      CLI entry point (no install needed)
 cartographer/         the package: extract/ analyze/ report/ mcp/ ui/
-skills/               eight Claude Code skills
+skills/               Claude Code skills, one per workflow
 agents/               a read-only explorer subagent
 .mcp.json             registers the MCP server for the plugin
-tests/test_all.py     116 tests; builds its own synthetic codebases
+tests/test_all.py     full suite; builds its own synthetic codebases
 examples/             a worked config for one large estate (safe to delete)
 install.sh            verify, optionally add to PATH or install as a plugin
 ```
