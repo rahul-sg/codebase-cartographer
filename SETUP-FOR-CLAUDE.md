@@ -4,6 +4,9 @@ You are reading this because the user pointed you at this directory (or at a
 zip containing it) and asked you to set up a codebase mapping tool. This file
 is the complete procedure. Follow it in order; each step has a check.
 
+**If the plugin is already loaded**, `/cartographer:setup` carries this same
+procedure in short form.
+
 **What this is:** `cartographer` — a Claude Code plugin and MCP server that
 maps a large multi-repo, multi-service codebase and serves an interactive
 visual map. Python standard library only: no `pip install`, no network calls,

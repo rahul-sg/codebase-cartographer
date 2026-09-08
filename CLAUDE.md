@@ -5,7 +5,8 @@ codebase and serves an interactive visual map of it.
 
 **If the user has just given you this directory or a zip of it and asked you to
 set it up: read `SETUP-FOR-CLAUDE.md` and follow it.** That file is a complete,
-ordered runbook with a check after every step.
+ordered runbook with a check after every step. The same procedure ships as the
+`/cartographer:setup` skill once the plugin is loaded.
 
 ## Two rules that apply whenever you work with this tool
 

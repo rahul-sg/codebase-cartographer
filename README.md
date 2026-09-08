@@ -55,7 +55,8 @@ claude --plugin-dir ~/tools/codebase-cartographer
 
 **Setting this up with Claude?** Point it at
 [`SETUP-FOR-CLAUDE.md`](SETUP-FOR-CLAUDE.md) — an ordered runbook with a check
-after every step.
+after every step. Once the plugin is loaded, `/cartographer:setup` does the
+same thing.
 
 Once it earns its place:
 
@@ -146,7 +147,7 @@ Then in Claude Code, just work — the MCP tools are used automatically.
 
 ## Skills
 
-`/cartographer:onboard` · `map` · `impact` · `pr-context` · `trace-flow` ·
+`/cartographer:setup` · `onboard` · `map` · `impact` · `pr-context` · `trace-flow` ·
 `service-brief` · `ai-surface` · `journal`
 
 ---
