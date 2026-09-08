@@ -226,6 +226,26 @@ item in this whole document.
 You mostly will not run the CLI. Claude uses the MCP tools directly. But
 knowing what is available shapes what you ask for.
 
+### Seeing it
+
+```bash
+cartographer ui
+```
+
+Keep this open in a tab while you work. It reads the same graph Claude does,
+so what you see and what Claude answers from are the same thing — and when
+Claude says "order-svc publishes `oms.order.submitted`, consumed by three
+services", you can look at that edge and click through to the lines that
+prove it.
+
+The habit worth forming: **click the edge, not just the node.** Any arrow
+expands into its citations. That is how you go from "the tool says these are
+connected" to "I have read the line where they connect", which is the
+difference between repeating a tool's output and knowing something.
+
+Start on **Coverage** on day one. It tells you what the map cannot see, which
+is the part you must not accidentally claim.
+
 ### Starting any unfamiliar task
 
 Just say what you are doing:

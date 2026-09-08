@@ -36,6 +36,46 @@ Add to Claude Code with `claude --plugin-dir ~/tools/cartographer`.
 
 ---
 
+## The visual map
+
+```bash
+cd /Users/rsengupta/projects/ong
+cartographer ui
+```
+
+For your estate specifically, these are the views that will earn their keep:
+
+**Data** — the one to open first. `nexus` and `common` share `cmndev`, and
+this is where you see which tables that actually means, and who writes them.
+With no JPA anywhere there is no other way to get this picture.
+
+**Map, at estate level** — around 25 backend modules plus three frontends,
+their hosts, topics and schemas, on one readable screen. Drill into a module
+to see its packages; drill again for files; click any edge for the
+`file:line` behind it. The `logistics` and `interoperability` nodes carry an
+"outside the build reactor" badge.
+
+**Flow** — trace `order`. You will see the Angular proxy prefix, the composed
+Spring route (`POST /order/api/v1/purchase-orders`, not `/{id}`), the tables,
+then the Kafka hop resolved from the `KafkaConstants` enum rather than from a
+string literal that does not exist.
+
+**Coverage** — your honest boundary. It lists the services whose repos you do
+not have, the ColdFusion pages whose source is in no repo, the tables whose
+DDL lives in the external `database-scripts-repo`, and the topic constants
+nothing on disk references. Every line there is a good question for a
+teammate.
+
+**Layers** — the 3D stack. Useful once, early, to feel the shape: three
+frontends above, the module band in the middle, Kafka and the MySQL schemas
+below, with the legacy ColdFusion pages hanging off to one side.
+
+**Time** — plays the last twelve months of commits per module. Worth watching
+before you pick what to work on: it shows you which parts of the estate are
+actually alive.
+
+---
+
 ## What it does that a generic tool would not
 
 Each of these exists because your stack breaks a common assumption.

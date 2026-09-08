@@ -55,6 +55,37 @@ See **[WORKFLOW.md](WORKFLOW.md)** for the full day-one-to-month-three guide.
 
 ---
 
+## The visual map
+
+```bash
+cartographer ui          # opens http://127.0.0.1:8787
+```
+
+A local, offline, clickable map of the whole estate, reading the same
+`graph.db` the MCP server reads. Loopback only, no CDN, no framework — it
+works behind a corporate proxy because it never leaves the machine.
+
+| View | What it answers |
+|---|---|
+| **Map** | How does everything connect? Drill estate → service → package → file. Click a node for detail, click an **edge** for the exact `file:line` citations behind it. |
+| **Layers** | What shape is this system? 3D stack: clients, services, messaging, data. |
+| **Data** | Who owns which table, and which tables are touched by more than one service? |
+| **Flow** | What happens end to end when an order is submitted? |
+| **Impact** | What breaks if I change this? With a copy-for-Claude button. |
+| **Time** | How did the estate get this way? Monthly activity, with a scrubber. |
+| **Coverage** | What can this map *not* see? |
+
+`scan` again in another terminal and the page updates itself.
+
+### Why it is hierarchical
+
+Your estate produces roughly 145,000 nodes. Drawn at once that is a grey
+hairball — not slow, **illegible**. So the graph collapses to whichever level
+you are looking at and rolls edges up with counts. Measured on a 39,796-node
+graph: the estate view renders **26 readable nodes with 39,770 rolled up
+inside them, in 0.39s**. Nothing is discarded — a service-to-service arrow
+expands into the individual calls that justify it.
+
 ## Quick start
 
 ```bash
@@ -88,6 +119,7 @@ Then in Claude Code, just work — the MCP tools are used automatically.
 | `questions` | What the scan could not determine |
 | `report` / `stats` | Regenerate reports / inspect the graph |
 | `doctor` | Check the environment |
+| `ui` | Open the interactive visual map in a browser |
 | `serve-mcp` | Run the MCP stdio server |
 
 ## MCP tools
