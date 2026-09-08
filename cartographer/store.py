@@ -380,8 +380,15 @@ class Store:
             "SELECT provenance, COUNT(*) n FROM edges GROUP BY provenance")}
         c["repos"] = [r["repo"] for r in self.conn.execute(
             "SELECT DISTINCT repo FROM nodes WHERE repo IS NOT NULL ORDER BY repo")]
-        c["services"] = [r["service"] for r in self.conn.execute(
-            "SELECT DISTINCT service FROM nodes WHERE service IS NOT NULL ORDER BY service")]
+        # Report actual service NODES, not the distinct `service` attribute.
+        # Files inside a container repo or a shared library carry that name in
+        # their attribute, which made containers and libraries look like
+        # services long after they had been reconciled away.
+        c["services"] = [r["name"] for r in self.conn.execute(
+            "SELECT name FROM nodes WHERE kind='service' ORDER BY name")]
+        c["libraries"] = [r["name"] for r in self.conn.execute(
+            "SELECT name FROM nodes WHERE kind='library' AND extra LIKE "
+            "'%artifactId%' ORDER BY name")]
         c["languages"] = {r["lang"]: r["n"] for r in self.conn.execute(
             "SELECT lang, COUNT(*) n FROM nodes WHERE lang IS NOT NULL "
             "GROUP BY lang ORDER BY n DESC")}

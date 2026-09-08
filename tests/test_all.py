@@ -1231,5 +1231,100 @@ class TestUIMissingGraph(unittest.TestCase):
                                                  _STATE["cfg_path"])
 
 
+class TestPackagedSetup(unittest.TestCase):
+    """The path a new machine actually takes: unpack, verify, init, scan."""
+
+    def test_containers_are_not_services(self):
+        """
+        A directory that contains other scan targets -- the workspace root, or
+        a repo whose modules are scanned individually -- must not appear as a
+        service. It used to, and then collected every unattributed finding.
+        """
+        import subprocess
+        work = tempfile.mkdtemp(prefix="cart-pkg-")
+        try:
+            import make_multiservice_fixture
+            root = os.path.join(work, "ws")
+            make_multiservice_fixture.build(root)
+            env = dict(os.environ, PYTHONPATH=ROOT)
+            run = lambda *a: subprocess.run(
+                [sys.executable, "-m", "cartographer.cli"] + list(a),
+                capture_output=True, text=True, timeout=180, env=env, cwd=root)
+
+            r = run("init", "--root", ".")
+            self.assertEqual(r.returncode, 0, r.stderr[-500:])
+            r = run("scan")
+            self.assertEqual(r.returncode, 0, r.stderr[-800:])
+
+            st = Store(os.path.join(root, ".cartographer", "graph.db"))
+            try:
+                services = {x["name"] for x in st.conn.execute(
+                    "SELECT name FROM nodes WHERE kind='service'")}
+                # The workspace root and the multi-module backend repo are
+                # containers, not services.
+                self.assertNotIn(os.path.basename(root), services)
+                self.assertNotIn("backend-repo", services)
+                # Real modules survive.
+                self.assertTrue({"order", "catalog"} <= services, services)
+                # Shared libraries are libraries, not services.
+                libs = {x["name"] for x in st.conn.execute(
+                    "SELECT name FROM nodes WHERE kind='library' "
+                    "AND extra LIKE '%artifactId%'")}
+                self.assertTrue({"framework", "cache"} <= libs, libs)
+                self.assertFalse(services & libs, "a name cannot be both")
+            finally:
+                st.close()
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+
+    def test_installer_is_runnable(self):
+        sh = os.path.join(ROOT, "install.sh")
+        self.assertTrue(os.path.isfile(sh))
+        self.assertTrue(os.access(sh, os.X_OK), "install.sh must be executable")
+
+    def test_agent_runbook_present_and_ordered(self):
+        """The runbook is what another Claude follows; keep its shape enforced."""
+        with open(os.path.join(ROOT, "SETUP-FOR-CLAUDE.md")) as fh:
+            text = fh.read()
+        for marker in ("Step 0", "Step 1", "Step 2", "Step 3", "Step 4",
+                       "Step 5", "Step 6", "Step 7"):
+            self.assertIn(marker, text)
+        # The two safety rules must survive any future edit.
+        self.assertIn("never run `scan` against a directory".lower(),
+                      text.lower())
+        self.assertIn("locations only, never values", text.lower())
+
+    def test_tool_carries_no_organisation_identifiers(self):
+        """
+        The tool must stay shareable. Anything company-specific belongs in
+        examples/, which can be deleted without affecting it.
+        """
+        import re
+        # Assembled from fragments so this file does not match its own
+        # pattern and report itself as an offender.
+        parts = ["itrade" + "network", "itn" + "-library", "ong" + "sqe",
+                 "iom" + "sqe", "itl" + "sqe", "icr" + "sqe", "iml" + "sqe",
+                 "rsen" + "gupta"]
+        bad = re.compile("|".join(parts), re.I)
+        offenders = []
+        for sub in ("cartographer", "tests", "bin", "skills", "agents",
+                    "templates", "hooks"):
+            base = os.path.join(ROOT, sub)
+            for dirpath, dirnames, filenames in os.walk(base):
+                dirnames[:] = [d for d in dirnames if d != "__pycache__"]
+                for fn in filenames:
+                    if fn.endswith((".pyc",)):
+                        continue
+                    path = os.path.join(dirpath, fn)
+                    try:
+                        with open(path, "r", encoding="utf-8",
+                                  errors="ignore") as fh:
+                            if bad.search(fh.read()):
+                                offenders.append(os.path.relpath(path, ROOT))
+                    except OSError:
+                        pass
+        self.assertEqual(offenders, [], "organisation identifiers leaked")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2 if "-v" in sys.argv else 1)

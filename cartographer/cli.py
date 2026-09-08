@@ -477,8 +477,23 @@ def _reconcile(st, cfg, triples):
         st.conn.execute("DELETE FROM nodes WHERE id=?", (svc_id,))
         merged += 1
 
-    # --- container repos ------------------------------------------------
-    module_repos = set()
+    # --- container targets ----------------------------------------------
+    # A scan target that CONTAINS another scan target is a container, not a
+    # service: the workspace root, or a repo whose modules are scanned
+    # individually. Containment is the reliable test -- counting modules per
+    # repo fails as soon as the config lists module directories directly,
+    # because then each module is its own target and the parent has none.
+    container_names = set()
+    paths = [(name, os.path.realpath(root)) for name, root, _s in triples]
+    for name, root in paths:
+        for other_name, other in paths:
+            if other_name == name or other == root:
+                continue
+            if other.startswith(root.rstrip(os.sep) + os.sep):
+                container_names.add(name)
+                break
+
+    module_repos = set(container_names)
     for r in st.conn.execute(
             "SELECT repo FROM nodes WHERE extra LIKE '%artifactId%' "
             "AND repo IS NOT NULL GROUP BY repo HAVING COUNT(*) > 1"):
@@ -492,14 +507,16 @@ def _reconcile(st, cfg, triples):
         st.conn.execute("DELETE FROM edges WHERE src=? OR dst=?", (svc_id, svc_id))
         st.conn.execute("DELETE FROM nodes WHERE id=?", (svc_id,))
         dropped += 1
-        st.add_gap("container-repo",
-                   "%s holds %d build modules, so it is a container rather "
-                   "than a service" % (repo, sum(
-                       1 for _ in st.conn.execute(
-                           "SELECT 1 FROM nodes WHERE repo=? AND extra LIKE "
-                           "'%artifactId%'", (repo,)))),
-                   "findings are attributed to the individual modules instead",
-                   "reconcile")
+        n_mod = st.conn.execute(
+            "SELECT COUNT(*) n FROM nodes WHERE repo=? AND extra LIKE "
+            "'%artifactId%'", (repo,)).fetchone()["n"]
+        st.add_gap(
+            "container-directory",
+            "%s contains other scanned targets%s, so it is a container rather "
+            "than a service" % (repo, (" and %d build modules" % n_mod)
+                                if n_mod else ""),
+            "findings are attributed to the individual modules and repos "
+            "inside it instead", "reconcile")
     st.commit()
     return {"merged": merged, "dropped": dropped}
 
@@ -804,6 +821,9 @@ def cmd_stats(args):
     out("version:    %s" % meta.get("version", "?"))
     out("repos:      %s" % ", ".join(c["repos"]))
     out("services:   %s" % ", ".join(x for x in c["services"] if x))
+    if c.get("libraries"):
+        out("libraries:  %s   (compiled in, not deployed)"
+            % ", ".join(c["libraries"]))
     out("languages:  %s" % c["languages"])
     out("nodes:      %d  %s" % (c["nodes"], c["nodes_by_kind"]))
     out("edges:      %d  %s" % (c["edges"], c["edges_by_kind"]))
