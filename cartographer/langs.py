@@ -180,6 +180,7 @@ require_once include include_once fmt make append copy cap panic
 # addition to CALL_NOISE before any definition is accepted, because a keyword
 # admitted as a symbol pollutes the graph and every query that touches it.
 KEYWORDS = frozenset("""
+if else for while switch do elif elseif endif end loop repeat until
 synchronized volatile transient strictfp instanceof throws extends implements
 package do finally else try switch native abstract sealed permits yield record
 public private protected internal static final const let var readonly override
