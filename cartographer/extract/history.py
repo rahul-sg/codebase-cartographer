@@ -157,9 +157,23 @@ def analyse_repo(repo_root, repo_name, months, max_files_per_commit):
             ticket_files[t].update((repo_name, p) for p in paths)
         author_day_files[(c["author"], day)].update((repo_name, p) for p in paths)
 
+    # monthly rollup for the time-lapse
+    months = defaultdict(lambda: {"commits": 0, "authors": set(),
+                                  "files": set(), "added": 0, "deleted": 0})
+    for c in commits:
+        mk = c["date"][:7]
+        rec = months[mk]
+        rec["commits"] += 1
+        rec["authors"].add(c["author"])
+        for path, a, d in c["files"]:
+            rec["files"].add(path)
+            rec["added"] += a
+            rec["deleted"] += d
+
     return {"metrics": metrics, "ownership": own, "own_added": own_added,
             "own_last": own_last, "pairs": pairs, "commits": len(commits),
-            "ticket_files": ticket_files, "author_day_files": author_day_files}
+            "ticket_files": ticket_files, "author_day_files": author_day_files,
+            "months": months}
 
 
 def run(store, cfg, repos, progress=None):
@@ -171,6 +185,7 @@ def run(store, cfg, repos, progress=None):
     store.conn.execute("DELETE FROM file_metrics")
     store.conn.execute("DELETE FROM coupling")
     store.conn.execute("DELETE FROM ownership")
+    store.conn.execute("DELETE FROM timeline")
 
     all_tickets = defaultdict(set)
     all_author_day = defaultdict(set)
@@ -225,6 +240,13 @@ def run(store, cfg, repos, progress=None):
             store.conn.executemany(
                 "INSERT OR REPLACE INTO coupling(a,b,a_repo,b_repo,shared,"
                 "a_revs,b_revs,degree,cross_repo) VALUES(?,?,?,?,?,?,?,?,?)", crows)
+
+        store.conn.executemany(
+            "INSERT OR REPLACE INTO timeline(month,service,repo,commits,authors,"
+            "files,added,deleted) VALUES(?,?,?,?,?,?,?,?)",
+            [(mk, service or repo_name, repo_name, r["commits"],
+              len(r["authors"]), len(r["files"]), r["added"], r["deleted"])
+             for mk, r in res["months"].items()])
 
         for t, files in res["ticket_files"].items():
             all_tickets[t].update(files)
@@ -310,6 +332,9 @@ def run(store, cfg, repos, progress=None):
     n_cross = sum(1 for r in crows) if crows else 0
     n_files = store.conn.execute("SELECT COUNT(*) n FROM file_metrics").fetchone()["n"]
     n_coup = store.conn.execute("SELECT COUNT(*) n FROM coupling").fetchone()["n"]
+    n_months = store.conn.execute(
+        "SELECT COUNT(DISTINCT month) n FROM timeline").fetchone()["n"]
     return {"commits": total_commits, "files_with_history": n_files,
+            "months": n_months,
             "coupling_pairs": n_coup, "cross_repo_pairs": n_cross,
             "repos_without_git": no_git}

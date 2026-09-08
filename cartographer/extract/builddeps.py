@@ -126,21 +126,57 @@ def parse(path, text):
     return uniq
 
 
+def _known_modules(store):
+    """
+    Module directories the Maven/build pass already identified.
+
+    Without this, `ong-ui-repo/ui/package.json` would create a service called
+    "ui" and the parent `server/pom.xml` one called "server" -- directory
+    names that are not modules at all.
+    """
+    import json as _json
+    out = {}
+    for r in store.conn.execute(
+            "SELECT name, extra FROM nodes WHERE extra LIKE '%module_dir%'"):
+        try:
+            ex = _json.loads(r["extra"])
+        except (ValueError, TypeError):
+            continue
+        d = ex.get("module_dir")
+        if d:
+            out[d] = r["name"]
+        if ex.get("artifactId"):
+            out.setdefault(ex["artifactId"], r["name"])
+    return out
+
+
 def run(store, cfg, repos, progress=None):
     store.clear_source(SOURCE)
+    known = _known_modules(store)
     nodes, edges = [], []
     internal_hits = 0
     n_manifests = 0
     follow = cfg.defaults.get("follow_symlinks", False)
 
     for repo_name, repo_root, svc in repos:
-        me = svc or repo_name
         for path in _manifests(repo_root, follow):
             text = _read(path)
             if text is None:
                 continue
             n_manifests += 1
             rel = os.path.relpath(path, repo_root).replace(os.sep, "/")
+            # The directory holding the manifest IS the module. Using the repo
+            # name instead invents a service for a multi-module container and
+            # attributes every dependency in the repo to it.
+            mdir = os.path.dirname(path)
+            me = svc or repo_name
+            if os.path.realpath(mdir) != os.path.realpath(repo_root):
+                base = os.path.basename(mdir)
+                if base in known:
+                    me = known[base]
+                else:
+                    resolved = cfg.resolve_service(base)
+                    me = resolved if resolved else (svc or repo_name)
             ev = "%s/%s" % (repo_name, rel)
             for coord, eco in parse(path, text):
                 # An in-estate dependency is a real service edge; an external
@@ -153,6 +189,14 @@ def run(store, cfg, repos, progress=None):
                                   "name": target, "service": target})
                     edges.append({"src": ids.service_id(me),
                                   "dst": ids.service_id(target),
+                                  "kind": "depends-on", "evidence": ev,
+                                  "provenance": "EXTRACTED", "confidence": 1.0,
+                                  "extra": {"via": "build dependency %s" % coord}})
+                elif tail in known:
+                    # An in-estate module referenced as a Maven coordinate is
+                    # that module, not a third-party library.
+                    edges.append({"src": ids.service_id(me),
+                                  "dst": "cart . library maven:%s" % tail,
                                   "kind": "depends-on", "evidence": ev,
                                   "provenance": "EXTRACTED", "confidence": 1.0,
                                   "extra": {"via": "build dependency %s" % coord}})

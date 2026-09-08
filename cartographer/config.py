@@ -366,6 +366,25 @@ def prune(dirpath, dirnames):
     return dirnames
 
 
+def datastore_id(engine, host, schema):
+    """
+    One identity for a datastore, whoever spotted it.
+
+    The topology scan reads `jdbc:mysql://mysqldb:3306/cmndev` and the compose
+    reader gets host and schema separately. Including the port in one and not
+    the other produced two nodes for the same schema, which then never showed
+    up as shared. Port is dropped: a schema is the same schema whatever port it
+    is published on.
+    """
+    engine = (engine or "db").lower()
+    aliases = {"postgresql": "postgres", "mariadb": "mysql",
+               "sqlserver": "mssql", "mongodb+srv": "mongodb"}
+    engine = aliases.get(engine, engine)
+    host = (host or "?").split(":")[0].strip("/").lower()
+    schema = (schema or "?").strip("/")
+    return "%s://%s/%s" % (engine, host, schema)
+
+
 def orphan_roots(roots, repos):
     """
     Configured roots that hold content outside any discovered repository.

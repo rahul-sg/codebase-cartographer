@@ -14,7 +14,7 @@ import os
 import re
 
 from .. import ids
-from ..config import SKIP_DIRS, prune
+from ..config import SKIP_DIRS, prune, datastore_id
 
 SOURCE = "topology"
 
@@ -228,7 +228,9 @@ def run(store, cfg, repos, progress=None):
         return services[name]["id"]
 
     for repo_name, repo_root, svc_name in repos:
-        ensure_service(svc_name or repo_name, repo_name)
+        # Deliberately NOT ensure_service(repo_name) here: a repo that holds
+        # many modules is a container, not a service, and creating a node for
+        # it produces a phantom that collects every unattributed finding.
 
         for path in _relevant_files(repo_root, cfg.defaults.get("follow_symlinks", False)):
             rel = os.path.relpath(path, repo_root).replace(os.sep, "/")
@@ -344,7 +346,9 @@ def run(store, cfg, repos, progress=None):
                     engine = (m.group(1) or m.group(3) or "db").lower()
                     if not dsn or "${" in dsn:
                         continue
-                    key = "%s://%s" % (engine, dsn.split("?")[0].lower())
+                    dsn = dsn.split("?")[0]
+                    hostpart, _, schema = dsn.partition("/")
+                    key = datastore_id(engine, hostpart, schema)
                     db_users.setdefault(key, set()).add((me, ev))
 
                 # 6. compose / k8s

@@ -20,6 +20,25 @@ BRACE_LANGS = {"java", "kotlin", "scala", "groovy", "typescript", "javascript",
                "go", "csharp", "rust", "php", "swift", "c", "cpp", "proto"}
 
 
+# Directory names that mark the start of a module tree. `server/<module>/...`
+# and `modules/<module>/...` are both common; the segment after one of these
+# is the module, not the repo.
+MODULE_ANCHORS = ("server", "modules", "services", "apps", "packages", "libs")
+
+
+def module_owner(cfg, repo_root, path, fallback):
+    """Attribute a file to its Maven/Gradle module rather than to its repo."""
+    rel = os.path.relpath(path, repo_root).replace(os.sep, "/")
+    parts = rel.split("/")
+    for anchor in MODULE_ANCHORS:
+        if anchor in parts:
+            i = parts.index(anchor)
+            if i + 1 < len(parts) - 1:
+                name = parts[i + 1]
+                return cfg.resolve_service(name) or name
+    return fallback
+
+
 def _is_generated(path):
     low = path.replace("\\", "/").lower()
     return any(h in low for h in GENERATED_HINTS)
@@ -301,7 +320,11 @@ def run(store, cfg, repos, progress=None):
 
     for repo_name, repo_root, service in repos:
         for path, lang in iter_source_files(repo_root, max_bytes, follow):
-            nodes, edges, defined = parse_file(path, lang, repo_name, repo_root, service)
+            # In a repo of Maven modules the repo name is far too coarse:
+            # stamping every file with it invents a phantom service and makes
+            # per-module questions unanswerable.
+            owner = module_owner(cfg, repo_root, path, service)
+            nodes, edges, defined = parse_file(path, lang, repo_name, repo_root, owner)
             if not nodes:
                 continue
             n_files += 1
@@ -319,7 +342,7 @@ def run(store, cfg, repos, progress=None):
                     fn_defs = sorted(
                         (n["line"], n["id"]) for n in nodes
                         if n["kind"] == "function" and n.get("line"))
-                    file_cache.append((path, lang, repo_name, repo_root, service,
+                    file_cache.append((path, lang, repo_name, repo_root, owner,
                                        langs.strip_noise(text, lang), rel, fn_defs))
             if progress and n_files % 500 == 0:
                 progress("  symbols: %d files…" % n_files)

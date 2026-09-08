@@ -15,7 +15,7 @@ import os
 import re
 
 from .. import ids, miniyaml
-from ..config import SKIP_DIRS, prune
+from ..config import SKIP_DIRS, prune, datastore_id
 
 SOURCE = "compose"
 
@@ -187,8 +187,7 @@ def run(store, cfg, repos, progress=None):
 
 def _record(nodes, edges, schema_users, svc, engine, host, port, schema, ev,
             key, is_infra):
-    dsn = "%s://%s/%s" % ((engine or "db").lower(), (host or "?").lower(),
-                          (schema or "?"))
+    dsn = datastore_id(engine, host, schema)
     did = "cart . datastore %s" % dsn
     nodes.append({"id": did, "kind": "datastore", "name": dsn,
                   "extra": {"engine": engine, "host": host, "port": port,

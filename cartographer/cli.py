@@ -72,7 +72,14 @@ def _open(cfg, create=True):
         note("No graph at %s. Run `cartographer scan` first." % path)
         raise SystemExit(2)
     cfg.ensure_out()
-    return Store(path)
+    st = Store(path)
+    if not create:
+        why = st.needs_rescan()
+        if why:
+            note("The graph is empty: %s" % why)
+            st.close()
+            raise SystemExit(2)
+    return st
 
 
 # ---------------------------------------------------------------- init
@@ -385,6 +392,13 @@ def cmd_scan(args):
                                     _brief(stats[name])))
 
     note("")
+    note("  reconciling…")
+    rec = _reconcile(st, cfg, triples)
+    if rec["merged"] or rec["dropped"]:
+        note("    merged %d duplicate node(s), dropped %d container service(s)"
+             % (rec["merged"], rec["dropped"]))
+    stats["reconcile"] = rec
+
     note("  analysing…")
     stats["hotspots"] = hotspots.compute(st)
     scores = pagerank.compute(st)
@@ -419,6 +433,75 @@ def cmd_scan(args):
     note("Next: `cartographer questions` for what to ask your team.")
     st.close()
     return 0
+
+
+def _reconcile(st, cfg, triples):
+    """
+    One real thing, one node.
+
+    Two problems the extractors cannot solve individually:
+
+      * A shared library is classified as a library by the Maven pass but
+        referenced as a service by later passes, leaving two nodes for one
+        artifact and splitting its edges between them.
+      * A repo that contains modules is not itself a service, but any pass
+        that falls back to the repo name creates a node for it that then
+        collects every unattributed finding.
+
+    Both are fixed here by rewiring edges onto the surviving node.
+    """
+    import json as _json
+    merged = dropped = 0
+
+    # --- libraries -----------------------------------------------------
+    lib_by_name = {}
+    for r in st.conn.execute(
+            "SELECT id, name, extra FROM nodes WHERE kind='library' "
+            "AND extra IS NOT NULL"):
+        try:
+            ex = _json.loads(r["extra"])
+        except (ValueError, TypeError):
+            continue
+        if ex.get("artifactId"):
+            lib_by_name[ex["artifactId"]] = r["id"]
+            lib_by_name.setdefault(r["name"], r["id"])
+
+    for name, lib_id in lib_by_name.items():
+        svc_id = "cart . service %s" % name
+        if not st.node(svc_id):
+            continue
+        st.conn.execute("UPDATE OR IGNORE edges SET src=? WHERE src=?", (lib_id, svc_id))
+        st.conn.execute("UPDATE OR IGNORE edges SET dst=? WHERE dst=?", (lib_id, svc_id))
+        st.conn.execute("DELETE FROM edges WHERE src=? OR dst=?", (svc_id, svc_id))
+        st.conn.execute("UPDATE nodes SET service=? WHERE service=?", (name, name))
+        st.conn.execute("DELETE FROM nodes WHERE id=?", (svc_id,))
+        merged += 1
+
+    # --- container repos ------------------------------------------------
+    module_repos = set()
+    for r in st.conn.execute(
+            "SELECT repo FROM nodes WHERE extra LIKE '%artifactId%' "
+            "AND repo IS NOT NULL GROUP BY repo HAVING COUNT(*) > 1"):
+        module_repos.add(r["repo"])
+    for repo in module_repos:
+        if cfg.service(repo):
+            continue                 # the user explicitly declared it
+        svc_id = "cart . service %s" % repo
+        if not st.node(svc_id):
+            continue
+        st.conn.execute("DELETE FROM edges WHERE src=? OR dst=?", (svc_id, svc_id))
+        st.conn.execute("DELETE FROM nodes WHERE id=?", (svc_id,))
+        dropped += 1
+        st.add_gap("container-repo",
+                   "%s holds %d build modules, so it is a container rather "
+                   "than a service" % (repo, sum(
+                       1 for _ in st.conn.execute(
+                           "SELECT 1 FROM nodes WHERE repo=? AND extra LIKE "
+                           "'%artifactId%'", (repo,)))),
+                   "findings are attributed to the individual modules instead",
+                   "reconcile")
+    st.commit()
+    return {"merged": merged, "dropped": dropped}
 
 
 def _brief(d):
@@ -736,6 +819,18 @@ def cmd_serve(args):
     return serve(cfg.db_path(), cfg.path)
 
 
+def cmd_ui(args):
+    cfg = cfgmod.load(args.config)
+    from .server import serve as serve_ui
+    if not os.path.exists(cfg.db_path()):
+        note("No graph at %s" % cfg.db_path())
+        note("Run `cartographer scan` first; the UI reads that file.")
+        if not args.force:
+            return 2
+    return serve_ui(cfg.db_path(), cfg.path, port=args.port, host=args.host,
+                    open_browser=not args.no_open)
+
+
 def cmd_doctor(args):
     """Check the environment before anything goes wrong at work."""
     ok = True
@@ -894,6 +989,16 @@ def build_parser():
 
     s = sub.add_parser("serve-mcp", help="run the MCP stdio server")
     s.set_defaults(func=cmd_serve)
+
+    s = sub.add_parser("ui", help="open the interactive visual map in a browser")
+    s.add_argument("--port", type=int, default=8787)
+    s.add_argument("--host", default="127.0.0.1",
+                   help="default 127.0.0.1 -- loopback only, deliberately")
+    s.add_argument("--no-open", action="store_true",
+                   help="do not launch a browser")
+    s.add_argument("--force", action="store_true",
+                   help="start even with no graph yet")
+    s.set_defaults(func=cmd_ui)
 
     s = sub.add_parser("doctor", help="check the environment")
     s.set_defaults(func=cmd_doctor)

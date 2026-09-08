@@ -995,5 +995,236 @@ class TestITNShape(unittest.TestCase):
         self.assertTrue(qs.strip())
 
 
+# ==========================================================================
+# The visual UI: hierarchical aggregation, the HTTP API, and the assets.
+# ==========================================================================
+
+class TestHierarchy(unittest.TestCase):
+    def setUp(self):
+        self.st = _STATE["st"]
+
+    def test_estate_is_readable(self):
+        from cartographer.analyze import hierarchy
+        g = hierarchy.graph(self.st, "estate")
+        # The whole point of the hierarchy: an estate view a human can read.
+        self.assertLess(g["stats"]["nodes"], 200)
+        self.assertGreater(g["stats"]["nodes"], 3)
+        self.assertGreater(g["stats"]["rolled_up"], 0)
+
+    def test_estate_has_no_inner_nodes(self):
+        from cartographer.analyze import hierarchy
+        g = hierarchy.graph(self.st, "estate")
+        for n in g["nodes"]:
+            self.assertIn(n["kind"], hierarchy.TOP_KINDS,
+                          "%s should have been rolled up" % n["kind"])
+
+    def test_edges_are_aggregated_with_counts(self):
+        from cartographer.analyze import hierarchy
+        g = hierarchy.graph(self.st, "estate")
+        self.assertTrue(g["edges"])
+        for e in g["edges"]:
+            self.assertGreaterEqual(e["count"], 1)
+            self.assertIn("style", e)
+            self.assertIn(e["provenance"], ("EXTRACTED", "INFERRED"))
+            self.assertIsInstance(e["samples"], list)
+
+    def test_no_self_edges(self):
+        from cartographer.analyze import hierarchy
+        for level, kw in (("estate", {}), ("service", {"focus": "order-svc"})):
+            g = hierarchy.graph(self.st, level, **kw)
+            for e in g["edges"]:
+                self.assertNotEqual(e["source"], e["target"])
+
+    def test_every_edge_endpoint_is_present(self):
+        from cartographer.analyze import hierarchy
+        g = hierarchy.graph(self.st, "estate")
+        ids = {n["id"] for n in g["nodes"]}
+        for e in g["edges"]:
+            self.assertIn(e["source"], ids)
+            self.assertIn(e["target"], ids)
+
+    def test_service_view_is_scoped(self):
+        from cartographer.analyze import hierarchy
+        svc = [n["label"] for n in hierarchy.graph(self.st, "estate")["nodes"]
+               if n["kind"] == "service"]
+        self.assertTrue(svc)
+        g = hierarchy.graph(self.st, "service", focus=svc[0])
+        self.assertLess(len(g["nodes"]), 120)
+        self.assertEqual(g["breadcrumb"][-1]["label"], svc[0])
+
+    def test_breadcrumbs_navigable(self):
+        from cartographer.analyze import hierarchy
+        g = hierarchy.graph(self.st, "service", focus="order-svc")
+        self.assertEqual(g["breadcrumb"][0]["level"], "estate")
+
+    def test_unknown_level_raises(self):
+        from cartographer.analyze import hierarchy
+        with self.assertRaises(ValueError):
+            hierarchy.graph(self.st, "nonsense")
+
+
+class TestUIServer(unittest.TestCase):
+    """Drives the real HTTP server over a socket, not the handler in isolation."""
+
+    @classmethod
+    def setUpClass(cls):
+        import threading
+        from http.server import ThreadingHTTPServer
+        from cartographer import server as srv
+        srv.Handler.source = srv.GraphSource(_STATE["st"].path, _STATE["cfg_path"])
+        cls.httpd = ThreadingHTTPServer(("127.0.0.1", 0), srv.Handler)
+        cls.port = cls.httpd.server_address[1]
+        cls.thread = threading.Thread(target=cls.httpd.serve_forever, daemon=True)
+        cls.thread.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.httpd.shutdown()
+        cls.httpd.server_close()
+
+    def get(self, path):
+        import urllib.request
+        url = "http://127.0.0.1:%d%s" % (self.port, path)
+        with urllib.request.urlopen(url, timeout=30) as r:
+            return r.status, r.read(), r.headers.get("Content-Type", "")
+
+    def get_json(self, path):
+        status, body, _ = self.get(path)
+        return status, json.loads(body.decode("utf-8"))
+
+    def test_index_and_assets(self):
+        for path in ("/", "/app.css", "/app.js", "/graph2d.js", "/graph3d.js",
+                     "/views.js"):
+            status, body, ctype = self.get(path)
+            self.assertEqual(status, 200, path)
+            self.assertTrue(len(body) > 200, path)
+
+    def test_ui_references_no_external_hosts(self):
+        """Offline guarantee: a CDN request would simply fail at work."""
+        import re
+        for path in ("/", "/app.css", "/app.js", "/graph2d.js", "/graph3d.js",
+                     "/views.js"):
+            _s, body, _c = self.get(path)
+            text = body.decode("utf-8", "replace")
+            # Ignore URLs that only appear inside comments or as sample data.
+            for m in re.finditer(r'(src|href)\s*=\s*["\']([^"\']+)', text):
+                url = m.group(2)
+                self.assertFalse(url.startswith(("http://", "https://", "//")),
+                                 "%s loads external resource %s" % (path, url))
+
+    def test_path_traversal_blocked(self):
+        import urllib.error
+        for evil in ("/../../etc/passwd", "/..%2f..%2fetc%2fpasswd",
+                     "/./../../cartographer/store.py"):
+            try:
+                status, _b, _c = self.get(evil)
+                self.assertNotEqual(status, 200, evil)
+            except urllib.error.HTTPError as e:
+                self.assertIn(e.code, (403, 404), evil)
+
+    def test_api_endpoints(self):
+        for path in ("/api/ping", "/api/stats", "/api/graph?level=estate",
+                     "/api/schema", "/api/coverage", "/api/timeline",
+                     "/api/questions", "/api/gaps", "/api/hotspots",
+                     "/api/coupling", "/api/flow?entity=order",
+                     "/api/search?q=order"):
+            status, d = self.get_json(path)
+            self.assertEqual(status, 200, path)
+            self.assertIsInstance(d, dict, path)
+            self.assertNotIn("error", d, path)
+
+    def test_graph_levels(self):
+        _s, estate = self.get_json("/api/graph?level=estate")
+        svc = [n["label"] for n in estate["nodes"] if n["kind"] == "service"]
+        self.assertTrue(svc)
+        _s, one = self.get_json("/api/graph?level=service&focus=" + svc[0])
+        self.assertEqual(one["level"], "service")
+        self.assertEqual(one["focus"], svc[0])
+
+    def test_node_detail_has_evidence(self):
+        _s, res = self.get_json("/api/search?q=computeTotal")
+        if not res["results"]:
+            self.skipTest("fixture has no computeTotal")
+        nid = res["results"][0]["id"]
+        _s, n = self.get_json("/api/node?id=" + nid.replace(" ", "%20")
+                              .replace("#", "%23").replace("`", "%60"))
+        self.assertIn("outgoing", n)
+        self.assertIn("incoming", n)
+
+    def test_impact_endpoint(self):
+        _s, d = self.get_json("/api/impact?target=computeTotal")
+        if "error" in d:
+            self.skipTest("no such symbol in this fixture")
+        self.assertIn("services", d)
+        self.assertIn("text", d)
+
+    def test_schema_endpoint_shape(self):
+        _s, d = self.get_json("/api/schema")
+        self.assertIn("tables", d)
+        for t in d["tables"]:
+            for key in ("name", "readers", "writers", "touched_by"):
+                self.assertIn(key, t)
+
+    def test_coverage_reports_blind_spots(self):
+        _s, d = self.get_json("/api/coverage")
+        self.assertIn("blind_spots", d)
+        self.assertIn("note", d)
+        self.assertGreater(len(d["note"]), 40)
+
+    def test_unknown_endpoint_is_404_json(self):
+        import urllib.error
+        try:
+            self.get("/api/does-not-exist")
+            self.fail("expected 404")
+        except urllib.error.HTTPError as e:
+            self.assertEqual(e.code, 404)
+            json.loads(e.read().decode("utf-8"))
+
+    def test_bad_params_do_not_500(self):
+        import urllib.error
+        for path in ("/api/graph?level=bogus", "/api/node?id=",
+                     "/api/node?id=nope", "/api/impact?target=",
+                     "/api/edge?source=a", "/api/search?q="):
+            try:
+                status, body, _c = self.get(path)
+                self.assertIn(status, (200, 400, 404), path)
+                json.loads(body.decode("utf-8"))
+            except urllib.error.HTTPError as e:
+                self.assertNotEqual(e.code, 500, path)
+                json.loads(e.read().decode("utf-8"))
+
+
+class TestUIMissingGraph(unittest.TestCase):
+    def test_reports_missing_graph_cleanly(self):
+        import threading, urllib.error, urllib.request
+        from http.server import ThreadingHTTPServer
+        from cartographer import server as srv
+        tmp = tempfile.mkdtemp()
+        srv.Handler.source = srv.GraphSource(os.path.join(tmp, "nope.db"))
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), srv.Handler)
+        port = httpd.server_address[1]
+        th = threading.Thread(target=httpd.serve_forever, daemon=True)
+        th.start()
+        try:
+            with urllib.request.urlopen(
+                    "http://127.0.0.1:%d/api/ping" % port, timeout=10) as r:
+                d = json.loads(r.read().decode())
+            self.assertFalse(d["graph"])
+            try:
+                urllib.request.urlopen(
+                    "http://127.0.0.1:%d/api/stats" % port, timeout=10)
+                self.fail("expected 503")
+            except urllib.error.HTTPError as e:
+                self.assertEqual(e.code, 503)
+                self.assertIn("cartographer scan",
+                              json.loads(e.read().decode())["error"])
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            shutil.rmtree(tmp, ignore_errors=True)
+            srv.Handler.source = srv.GraphSource(_STATE["st"].path,
+                                                 _STATE["cfg_path"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2 if "-v" in sys.argv else 1)

@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>cartographer — codebase map</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+
+<header id="top">
+  <div class="brand">cartographer</div>
+
+  <nav id="views">
+    <button data-view="map"      class="on" title="Hierarchical graph — drill from estate to line">Map</button>
+    <button data-view="layers"   title="3D layered architecture">Layers</button>
+    <button data-view="data"     title="Tables × services — who reads and writes what">Data</button>
+    <button data-view="flow"     title="Follow one entity end to end">Flow</button>
+    <button data-view="impact"   title="Blast radius of a change">Impact</button>
+    <button data-view="time"     title="How the estate evolved">Time</button>
+    <button data-view="coverage" title="What is mapped, guessed, and invisible">Coverage</button>
+  </nav>
+
+  <div class="spacer"></div>
+
+  <div class="search">
+    <input id="q" placeholder="search anything…" autocomplete="off" spellcheck="false">
+    <div id="results" hidden></div>
+  </div>
+
+  <button id="themeBtn" class="icon" title="Toggle theme">◐</button>
+  <div id="status" class="status" title="Graph freshness">—</div>
+</header>
+
+<div id="crumbbar">
+  <div id="crumbs"></div>
+  <div class="spacer"></div>
+  <div id="viewhint" class="hint"></div>
+</div>
+
+<main>
+  <aside id="left">
+    <section class="panel">
+      <h3>Show connections</h3>
+      <div id="filters" class="filters"></div>
+      <label class="row"><input type="checkbox" id="hideInferred"> hide inferred (unverified)</label>
+      <label class="row"><input type="checkbox" id="hideLibs" checked> hide third-party libraries</label>
+    </section>
+
+    <section class="panel" id="legendPanel">
+      <h3>Legend</h3>
+      <div id="legend"></div>
+    </section>
+
+    <section class="panel" id="statsPanel">
+      <h3>Graph</h3>
+      <div id="gstats" class="kv"></div>
+    </section>
+  </aside>
+
+  <div id="stage">
+    <canvas id="cv"></canvas>
+    <div id="overlay"></div>
+    <div id="tooltip" hidden></div>
+    <div id="empty" hidden>
+      <h2>No graph yet</h2>
+      <p>Run <code>cartographer scan</code> in your workspace, then reload.</p>
+    </div>
+    <div id="stagectl">
+      <button id="zoomIn"  title="Zoom in">+</button>
+      <button id="zoomOut" title="Zoom out">−</button>
+      <button id="fit"     title="Fit to view">⤢</button>
+      <button id="freeze"  title="Pause/resume layout">❚❚</button>
+    </div>
+  </div>
+
+  <aside id="right">
+    <div id="detail">
+      <div class="placeholder">
+        <h3>Nothing selected</h3>
+        <p>Click a node to inspect it. Double-click to drill in.
+           Click an edge to see the exact <code>file:line</code> that proves it.</p>
+        <p class="muted">Everything here is evidence-backed. Anything marked
+           <span class="inf">inferred</span> is a name match, not a fact — verify
+           before you repeat it.</p>
+      </div>
+    </div>
+  </aside>
+</main>
+
+<script src="/graph2d.js"></script>
+<script src="/graph3d.js"></script>
+<script src="/views.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

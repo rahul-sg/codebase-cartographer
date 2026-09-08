@@ -17,7 +17,7 @@ import os
 import sqlite3
 import time
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -126,6 +126,22 @@ CREATE TABLE IF NOT EXISTS ranks (
 );
 CREATE INDEX IF NOT EXISTS idx_ranks_rank ON ranks(rank DESC);
 
+-- Monthly activity per service, for the time-lapse view. Cheap to compute
+-- from the log we already parse, and it is the only honest fourth dimension
+-- available: how the estate actually got this way.
+CREATE TABLE IF NOT EXISTS timeline (
+    month    TEXT NOT NULL,       -- YYYY-MM
+    service  TEXT NOT NULL,
+    repo     TEXT NOT NULL,
+    commits  INTEGER DEFAULT 0,
+    authors  INTEGER DEFAULT 0,
+    files    INTEGER DEFAULT 0,
+    added    INTEGER DEFAULT 0,
+    deleted  INTEGER DEFAULT 0,
+    PRIMARY KEY (month, service, repo)
+);
+CREATE INDEX IF NOT EXISTS idx_timeline_month ON timeline(month);
+
 -- Anything the scan could not resolve. Surfaced in the report, because a
 -- known gap is useful and a silent one is dangerous.
 CREATE TABLE IF NOT EXISTS gaps (
@@ -169,10 +185,16 @@ class Store:
         # Forward-only. The graph is a derived artifact: rebuilding it is cheap
         # and always correct, whereas a half-migrated graph is silently wrong.
         for t in ("nodes", "edges", "file_metrics", "coupling",
-                  "ownership", "ranks", "gaps"):
+                  "ownership", "ranks", "gaps", "timeline"):
             self.conn.execute("DELETE FROM {}".format(t))
         self.set_meta("schema_version", str(SCHEMA_VERSION))
         self.set_meta("migrated_at", _now())
+        # Wiping is correct -- the graph is derived and rebuilding is cheap --
+        # but doing it silently leaves every query answering "nothing found",
+        # which reads as a broken tool rather than a stale file.
+        self.set_meta("needs_rescan",
+                      "schema %d -> %d: the graph was cleared, run "
+                      "`cartographer scan`" % (have, SCHEMA_VERSION))
 
     def close(self):
         try:
@@ -188,6 +210,13 @@ class Store:
         return False
 
     # -- meta --------------------------------------------------------------
+
+    def needs_rescan(self):
+        """Non-empty when the stored graph was cleared by a schema upgrade."""
+        if self.conn.execute(
+                "SELECT COUNT(*) n FROM nodes").fetchone()["n"]:
+            return None
+        return self.get_meta("needs_rescan")
 
     def set_meta(self, key, value):
         self.conn.execute(
@@ -340,7 +369,8 @@ class Store:
 
     def counts(self):
         c = {}
-        for t in ("nodes", "edges", "file_metrics", "coupling", "ownership", "gaps"):
+        for t in ("nodes", "edges", "file_metrics", "coupling", "ownership",
+                  "gaps", "timeline"):
             c[t] = self.conn.execute("SELECT COUNT(*) n FROM %s" % t).fetchone()["n"]
         c["nodes_by_kind"] = {r["kind"]: r["n"] for r in self.conn.execute(
             "SELECT kind, COUNT(*) n FROM nodes GROUP BY kind ORDER BY n DESC")}
