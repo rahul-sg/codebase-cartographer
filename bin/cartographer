@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# cartographer launcher. Resolves the package next to this script so the tool
+# works from any directory without installation or PYTHONPATH fiddling.
+set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PY="${CARTOGRAPHER_PYTHON:-}"
+if [ -z "$PY" ]; then
+  for c in python3 python; do
+    if command -v "$c" >/dev/null 2>&1; then PY="$c"; break; fi
+  done
+fi
+if [ -z "$PY" ]; then
+  echo "cartographer: no python3 on PATH" >&2; exit 127
+fi
+exec env PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}" "$PY" -m cartographer.cli "$@"

@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "cartographer": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/bin/cartographer",
+      "args": ["serve-mcp"],
+      "env": {
+        "CARTOGRAPHER_PLUGIN_ROOT": "${CLAUDE_PLUGIN_ROOT}"
+      }
+    }
+  }
+}

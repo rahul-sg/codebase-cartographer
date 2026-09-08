@@ -1,0 +1,24 @@
+{
+  "_comment": [
+    "OPTIONAL and OFF by default. To enable, rename this file to hooks.json",
+    "and run /reload-plugins.",
+    "",
+    "This nudges Claude toward the ranked map before it starts reading files",
+    "at random in a large estate. It is genuinely useful on a 15-service",
+    "codebase and genuinely annoying on a small one, which is why it does not",
+    "ship enabled -- a plugin that changes how your session behaves without",
+    "asking is a bad neighbour."
+  ],
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/bin/cartographer stats 2>/dev/null | head -6 || true"
+          }
+        ]
+      }
+    ]
+  }
+}

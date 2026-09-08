@@ -1,71 +1,42 @@
 ---
-description: Blast radius for a change — what depends on this symbol, file, or service, across both the symbol graph and service topology. Use when the user asks what breaks if they change X, what depends on X, who to tag on a PR, or is writing a PR description for a change with cross-service reach.
+name: impact
+description: Blast radius — what breaks if this changes, which services are affected, what contract is at risk, and who should review. Use BEFORE editing unfamiliar code, when the user asks what depends on something, and when writing a PR description.
 ---
 
 # Blast radius
 
-Answers "if I change this, what else is affected?" — across **both** layers, which
-is the point. A symbol-level graph stops at the repo boundary; a service map
-doesn't know about functions. Joined, they cross the boundary.
+Call `mcp__cartographer__blast_radius` with the symbol, `Class.method`, file
+path or service name.
 
-Arguments: `$ARGUMENTS` — a symbol name, file path, service name, or nothing
-(then use the current git diff).
+It crosses both layers, which is the point: a symbol graph stops at the repo
+boundary and a service map knows nothing about functions. Joined, a change to a
+method can be followed out to the services that consume its service.
 
-## Inputs
+## Read the output in this order
 
-- `context/symbols.json` — from `scripts/symbol_graph.py`
-- `context/services.json` — from `/cartographer:topology`
+1. **Contract surface** — routes, events and schemas of affected services. This
+   is what breaks *other teams*, so it leads.
+2. **Services affected** — with the evidence for each. Edges marked
+   `runtime-confirmed` come from real traffic and are the most trustworthy.
+3. **Changes together** — historical co-change from git, especially
+   `CROSS-REPO`. This finds coupling no static analysis can see; a cross-repo
+   pair usually means an implicit shared contract.
+4. **Suggested reviewers** — from git history, not the org chart.
+5. **Limits of visibility** — say these out loud.
 
-If either is missing, say which and offer to generate it. You can still answer
-partially with one layer; be explicit about which half of the picture is absent,
-because a blast radius that silently omits cross-service reach is the dangerous
-kind of wrong.
+## Also worth calling
 
-## Method
-
-**1. Resolve the target.** Match against node `id`, `name`, and `file`. If the
-name is ambiguous, list the candidates and ask — do not pick one.
-
-**2. Walk inbound edges (symbol layer).** Who `calls`, `imports`, or `extends`
-the target, transitively. Depth 2 is usually the useful limit; go deeper only if
-asked. Separate `EXTRACTED` (read from source) from `INFERRED` (name-matched)
-findings and label them — inferred edges are leads to verify, not facts.
-
-**3. Cross the boundary (service layer).** Take the services owning the affected
-symbols and look up their inbound edges in `services.json`. This is the step
-that catches what an AST-only tool cannot:
-
-> "You changed `OrderValidator.validate` in order-svc. That's fine internally —
-> but order-svc publishes `order.submitted`, and pricing-svc and audit-svc both
-> consume it."
-
-**4. Check the contract surface.** Flag it loudly if the change touches an HTTP
-handler signature, an event payload shape, a shared DB schema, or a proto
-definition. These are the changes that break other teams, and they're what a PR
-description most needs to call out.
-
-**5. Attribute owners.** Run `scripts/git-ownership.sh` on the affected repos to
-name who to tag for review.
-
-## Output
-
-Answer in the conversation, concise:
-
-- **Direct dependents** — with `file:line`.
-- **Cross-service reach** — which services, via what mechanism.
-- **Contract surface** — anything that could break a consumer, called out first.
-- **Suggested reviewers** — from git history, with why.
-- **Confidence** — say plainly what the regex backend may have missed.
-
-When the user is writing a PR, offer this as a paste-ready block for the
-description. That's the composition with their existing PR skill: this produces
-the impact analysis, their skill produces the narrative.
+`mcp__cartographer__coupled_files` with `cross_repo_only: true` before assuming
+a change is contained to one service.
 
 ## Rules
 
-- **Never present an `INFERRED` edge as certain.** Say "possible caller, verify".
-- **State what you can't see.** If `/projects/ong` holds 5 of 15+ services, a
-  consumer may live in a repo not on disk. "No known consumers *among the repos
-  I can see*" is the honest phrasing, and the difference matters.
-- Under-reporting blast radius is far worse than over-reporting it. When
-  uncertain, include it and mark it uncertain.
+- **`?` marks an INFERRED edge.** Never restate one as fact. Say "possible
+  caller — verify at `file:line`".
+- **Absence of an edge is not proof of safety.** The dependent may live in a
+  repo not on this machine, or be reached through reflection, dependency
+  injection, a service mesh, or config. Say that when the result is empty.
+- Over-report rather than under-report. A false positive costs a minute; a
+  missed consumer costs an incident.
+- When the user is writing a PR, offer a paste-ready summary: services touched,
+  downstream consumers, contract changes, suggested reviewers.

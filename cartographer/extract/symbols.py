@@ -122,6 +122,9 @@ def parse_file(path, lang, repo, repo_root, service):
         indent = len(line) - len(line.lstrip(" \t"))
         marker_here = containers.marker_at_line_start(indent)
 
+        # One definition per line. Two on a line (`class X { void y() {} }`)
+        # yields only the first -- accepted, because handling it properly needs
+        # a real parser and real code is not written that way.
         matched = None
         for kind, pat in def_patterns:
             m = pat.match(line)
@@ -202,6 +205,23 @@ def _split_parents(blob):
     return out[:8]
 
 
+def _enclosing(defs, line):
+    """
+    Innermost function definition starting at or before `line`.
+
+    An approximation -- it does not track block ends -- but attributing a call
+    to the function it sits in is far more useful than attributing it to the
+    file, and being off at a file's tail is a small price for that precision.
+    """
+    best = None
+    for dline, sid in defs:
+        if dline <= line:
+            best = sid
+        else:
+            break
+    return best
+
+
 def resolve_calls(files, index, by_repo):
     """
     Call edges, resolved against the symbol index.
@@ -215,7 +235,7 @@ def resolve_calls(files, index, by_repo):
     tool's contract is that it never presents a lead as a fact.
     """
     edges, gaps = [], []
-    for path, lang, repo, repo_root, service, clean, rel in files:
+    for path, lang, repo, repo_root, service, clean, rel, fn_defs in files:
         fid = ids.file_id(repo, lang, rel)
         seen = set()
         for i, line in enumerate(clean.split("\n"), start=1):
@@ -250,9 +270,17 @@ def resolve_calls(files, index, by_repo):
                     seen.add(name)
                     continue            # same-file call: low information
                 seen.add(name)
-                edges.append({"src": fid, "dst": chosen, "kind": "calls",
+                caller = _enclosing(fn_defs, i) or fid
+                edges.append({"src": caller, "dst": chosen, "kind": "calls",
                               "evidence": "%s:%d" % (rel, i),
                               "provenance": "INFERRED", "confidence": conf})
+                if caller != fid:
+                    # Keep a file-level edge too, so file-granularity queries
+                    # and the repo map still see the dependency.
+                    edges.append({"src": fid, "dst": chosen, "kind": "calls",
+                                  "evidence": "%s:%d" % (rel, i),
+                                  "provenance": "INFERRED",
+                                  "confidence": conf * 0.9})
     return edges, gaps
 
 
@@ -289,8 +317,11 @@ def run(store, cfg, repos, progress=None):
                 text = _read(path)
                 if text is not None:
                     rel = os.path.relpath(path, repo_root).replace(os.sep, "/")
+                    fn_defs = sorted(
+                        (n["line"], n["id"]) for n in nodes
+                        if n["kind"] == "function" and n.get("line"))
                     file_cache.append((path, lang, repo_name, repo_root, service,
-                                       langs.strip_noise(text, lang), rel))
+                                       langs.strip_noise(text, lang), rel, fn_defs))
             if progress and n_files % 500 == 0:
                 progress("  symbols: %d files…" % n_files)
 

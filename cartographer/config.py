@@ -239,7 +239,19 @@ def _token_variants(t):
 
 
 def find_config(start=None):
-    """Walk upward looking for a config file. Returns a path or None."""
+    """
+    Locate the config. CARTOGRAPHER_CONFIG wins, then an upward walk from
+    `start` (or cwd).
+
+    The env var matters for the MCP server: Claude Code launches it with the
+    project directory as cwd, which is usually right, but a graph kept outside
+    the project needs an explicit pointer.
+    """
+    env = os.environ.get("CARTOGRAPHER_CONFIG")
+    if env:
+        env = _expand(env)
+        if os.path.isfile(env):
+            return env
     cur = os.path.abspath(start or os.getcwd())
     seen = set()
     while cur and cur not in seen:
@@ -281,6 +293,26 @@ def load(path=None, start=None):
     if os.path.basename(base) == "config":
         base = os.path.dirname(base)
     return Config(data, path, base_dir=base)
+
+
+_SOURCE_EXT = (".java", ".kt", ".scala", ".groovy", ".py", ".ts", ".tsx", ".js",
+               ".jsx", ".go", ".rb", ".cs", ".rs", ".php", ".swift", ".c",
+               ".cc", ".cpp", ".proto", ".sql")
+
+
+def _has_source(path, max_depth=3):
+    """Cheap check: does this tree contain anything we would parse?"""
+    base = path.rstrip(os.sep).count(os.sep)
+    for dirpath, dirnames, filenames in os.walk(path):
+        if dirpath.rstrip(os.sep).count(os.sep) - base > max_depth:
+            dirnames[:] = []
+            continue
+        dirnames[:] = [d for d in dirnames
+                       if d not in SKIP_DIRS and not d.startswith(".")]
+        for fn in filenames:
+            if fn.lower().endswith(_SOURCE_EXT):
+                return True
+    return False
 
 
 def discover_repos(roots, max_depth=4, follow_symlinks=False):
@@ -328,15 +360,18 @@ def discover_repos(roots, max_depth=4, follow_symlinks=False):
 
         walk(root)
         if not found or all(not p.startswith(root) for p in found):
-            # No git anywhere: treat immediate subdirectories as pseudo-repos
-            # so a plain source drop still maps.
+            # No git anywhere. Treat immediate subdirectories as pseudo-repos so
+            # a plain source drop still maps -- but only if there is actually
+            # source here. Otherwise `init` on an empty directory would report a
+            # repository that does not exist.
             try:
                 subs = [e.path for e in os.scandir(root)
                         if e.is_dir() and e.name not in SKIP_DIRS
                         and not e.name.startswith(".")]
             except OSError:
                 subs = []
-            found.extend(subs or [root])
+            candidates = subs or [root]
+            found.extend([c for c in candidates if _has_source(c)])
     # stable, de-duplicated
     out, seen = [], set()
     for p in found:

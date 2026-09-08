@@ -1,8 +1,7 @@
 {
   "name": "cartographer",
-  "description": "Maps a large multi-service codebase: cross-service topology, per-service briefs, end-to-end flow traces, AI/ML integration surface, and a ramp-up question journal.",
-  "version": "0.1.0",
-  "author": {
-    "name": "Rahul Sengupta"
-  }
+  "description": "Maps a large multi-service codebase you did not write: cross-service topology from config and runtime traces, a symbol graph with PageRank ranking, churn-and-complexity hotspots, cross-repo change coupling from git history, blast-radius analysis, and an MCP server that exposes all of it to Claude.",
+  "version": "1.0.0",
+  "author": { "name": "Rahul Sengupta" },
+  "keywords": ["codebase-map", "microservices", "onboarding", "code-graph"]
 }

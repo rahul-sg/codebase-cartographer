@@ -1,0 +1,39 @@
+# cartographer configuration -- copy to cartographer.yaml and edit.
+# `cartographer init --root <dir>` generates this for you.
+
+roots:
+  - /projects/ong          # a directory CONTAINING your service repos
+
+defaults:
+  history_months: 12       # git history window
+  call_edges: true         # symbol-level call inference (slower, more useful)
+  max_commit_files: 40     # commits touching more files are sweeps; ignored
+                           # for coupling, or everything couples to everything
+  min_coupling_shared: 3
+  min_coupling_degree: 0.30
+
+# The single highest-leverage section. The same service is written many ways
+# across code, config and image tags; every alias you add sharpens the map.
+services:
+  - name: order-svc
+    repo: /projects/ong/order-svc
+    aliases: [OrderService, ORDER_SVC, order-service]
+    purpose: "Owns the order lifecycle from submission to fulfillment."
+    owns_data: [orders, order_lines]
+    team: ""
+
+  # A service you depend on but whose repo you do not have. Listing it means
+  # edges pointing at it resolve instead of being dropped.
+  - name: ledger-svc
+    aliases: [ledger, LEDGER_SERVICE]
+
+flows:
+  - buyer submits an order
+  - order cancellation
+
+# Exported APM service graphs. The strongest evidence available: measured
+# traffic, not inferred config. Also reveals services whose repos you lack.
+# Accepts OTel servicegraph metrics, Jaeger/Zipkin dependency JSON, or a
+# source,target,calls CSV.
+traces: []
+  # - ~/exports/otel-servicegraph.prom
