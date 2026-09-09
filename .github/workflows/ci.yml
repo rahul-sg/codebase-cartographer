@@ -1,0 +1,80 @@
+# CI for codebase-cartographer.
+#
+# Two jobs, deliberately separate. The leak check is not "one more test" -- it
+# is the one whose failure means something has already been published, so it
+# runs first, fast, and on its own, where it cannot be lost in the scroll of a
+# larger suite.
+#
+# The tool is stdlib-only by design, so there is nothing to install.
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  leak-check:
+    name: no organisation identifiers
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Guard
+        working-directory: tests
+        run: python3 -m unittest test_all -k organisation -v
+
+      # Belt and braces: the guard reads file CONTENT, this catches a graph
+      # database or a local config committed as a whole file, which content
+      # matching would not necessarily flag.
+      - name: No scan artefacts in the tree
+        run: |
+          found=$(git ls-files | grep -E '(\.db|\.sqlite3?|^cartographer\.yaml|/cartographer\.yaml|\.pyc|__pycache__/|(^|/)\.cartographer/)' || true)
+          if [ -n "$found" ]; then
+            echo "Scan artefacts are tracked by git:"; echo "$found"; exit 1
+          fi
+          echo "clean"
+
+  tests:
+    name: test suite
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.9", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # History extraction is a real code path; a shallow clone would skip
+          # those tests silently rather than failing.
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Configure git identity
+        # Fixture generators make real commits; git refuses without an identity.
+        run: |
+          git config --global user.email "ci@example.test"
+          git config --global user.name "CI"
+          git config --global init.defaultBranch main
+      - name: Unit tests
+        run: python3 -m unittest discover -s tests -q
+
+  renderer:
+    name: renderer smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Parse every UI script
+        run: for f in cartographer/ui/*.js tests/*.js; do node --check "$f"; done
+      - name: Render against a strict canvas
+        # Executes both engines across ~1500 camera states and asserts no
+        # invalid geometry, no lost graph, and a bounded layout step.
+        run: node tests/render_smoke.js

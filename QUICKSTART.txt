@@ -9,6 +9,16 @@ For a human in a hurry:
     /path/to/bin/cartographer scan
     /path/to/bin/cartographer ui    # opens http://127.0.0.1:8787
 
+If you put this in git, install the hooks BEFORE the first revision:
+
+    git init
+    ./scripts/install-git-hooks.sh
+
+The hook refuses any change containing a graph database, a local
+cartographer.yaml, or an organisation identifier. It exists because git
+history is the part that is hard to undo — CI only catches a leak after the
+object already exists.
+
 For Claude: read SETUP-FOR-CLAUDE.md — it is a complete runbook.
 
 Requires Python 3.8+ and git. Nothing else. No pip install, no network.

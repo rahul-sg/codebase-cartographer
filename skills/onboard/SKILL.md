@@ -16,7 +16,7 @@ leaves the machine and nothing is sent anywhere.
    repository it found.
 3. **Fix the aliases.** This is the step that matters most and the one people
    skip. The same service is written many ways — `order-svc`, `OrderService`,
-   `ORDER_SERVICE_URL`, `itn/order-svc:latest`. Every alias you add to
+   `ORDER_SERVICE_URL`, `acme/order-svc:latest`. Every alias you add to
    `cartographer.yaml` sharpens the whole map. Read the config with the user
    and fill in `aliases`, `purpose` and `owns_data` for anything they know.
 4. `cartographer scan` — builds the graph and writes the reports.

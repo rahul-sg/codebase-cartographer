@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+#
+# Refuse to commit a graph database, a local config, or any organisation
+# identifier.
+#
+# CI is the wrong place for this check on its own. By the time CI runs, the
+# object already exists in git history, and history is the part that is hard
+# to remove -- `filter-branch` and friends are unreliable once anything has
+# been cloned, forked or indexed. A pre-commit hook stops the object being
+# written at all, which is the only reliable moment.
+#
+# Install with:  ./scripts/install-git-hooks.sh
+# Bypass with:   git commit --no-verify   (know why you are doing it)
+#
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+FAIL=0
+
+# ---------------------------------------------------------------- artefacts
+# A graph database is a complete structural map of whatever was last scanned.
+# On a work machine that is the single most sensitive thing in the tree.
+STAGED="$(git diff --cached --name-only --diff-filter=ACMR || true)"
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  case "$f" in
+    *.db|*.sqlite|*.sqlite3|.cartographer/*|*/.cartographer/*)
+      echo "BLOCKED: $f -- graph database or scan output" >&2; FAIL=1 ;;
+    cartographer.yaml|*/cartographer.yaml)
+      echo "BLOCKED: $f -- local config with real paths (commit the .example)" >&2
+      FAIL=1 ;;
+    *.pyc|__pycache__/*|*/__pycache__/*)
+      echo "BLOCKED: $f -- build artefact" >&2; FAIL=1 ;;
+  esac
+done <<< "$STAGED"
+
+# ---------------------------------------------------------------- identifiers
+# Reuse the suite's own guard rather than a second copy of the pattern list:
+# two lists drift, and the one that drifts is always the one you trusted.
+if command -v python3 >/dev/null 2>&1 && [ -f "$ROOT/tests/test_all.py" ]; then
+  if ! ( cd "$ROOT/tests" && PYTHONDONTWRITEBYTECODE=1 \
+         python3 -m unittest test_all -k organisation -q >/dev/null 2>&1 ); then
+    echo "" >&2
+    echo "BLOCKED: organisation identifiers found in tracked files." >&2
+    ( cd "$ROOT/tests" && PYTHONDONTWRITEBYTECODE=1 \
+      python3 -m unittest test_all -k organisation 2>&1 \
+      | sed -n '/AssertionError/,/^$/p' ) >&2
+    FAIL=1
+  fi
+fi
+
+if [ "$FAIL" -ne 0 ]; then
+  echo "" >&2
+  echo "Commit refused. Fix the above, or use --no-verify if you are certain." >&2
+  exit 1
+fi

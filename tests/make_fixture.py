@@ -317,7 +317,7 @@ channels:
                "pricing-svc": ("Sam Okafor", "Dana Reyes"),
                "catalog-svc": ("Priya Nair", "Dana Reyes"),
                "inventory-api": ("Priya Nair", "Sam Okafor"),
-               "ml-svc": ("Rahul Sengupta", "Priya Nair")}
+               "ml-svc": ("Alex Kim", "Priya Nair")}
     for name in ("order-svc", "pricing-svc", "catalog-svc", "inventory-api", "ml-svc"):
         repo = os.path.join(root, name)
         git(repo, "init", "-q")
@@ -378,7 +378,7 @@ channels:
                "2026-0%d-0%dT16:00:00" % (2 + k, 5 + k))
     for k in range(3):
         touch(msvc, "ml/matcher.py", "\n# ml %d\n" % k)
-        commit(msvc, "TICKET-%d matcher tuning" % (5000 + k), "Rahul Sengupta",
+        commit(msvc, "TICKET-%d matcher tuning" % (5000 + k), "Alex Kim",
                "2026-0%d-1%dT10:00:00" % (4 + k, 4 + k))
     return root
 

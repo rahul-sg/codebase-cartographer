@@ -96,17 +96,18 @@ works behind a corporate proxy because it never leaves the machine.
 
 ### Why it is hierarchical
 
-Your estate produces roughly 145,000 nodes. Drawn at once that is a grey
-hairball — not slow, **illegible**. So the graph collapses to whichever level
-you are looking at and rolls edges up with counts. Measured on a 39,796-node
-graph: the estate view renders **26 readable nodes with 39,770 rolled up
-inside them, in 0.39s**. Nothing is discarded — a service-to-service arrow
-expands into the individual calls that justify it.
+A large estate can easily produce well over 100,000 nodes. Drawn at once that
+is a grey hairball — not slow, **illegible**. So the graph collapses to
+whichever level you are looking at and rolls edges up with counts. On a graph
+with tens of thousands of nodes, the estate view still renders **a small,
+readable set of top-level nodes with the rest rolled up inside them, in well
+under a second**. Nothing is discarded — a service-to-service arrow expands
+into the individual calls that justify it.
 
 ## Quick start
 
 ```bash
-cartographer init --root /projects/ong    # discover repos, write config
+cartographer init --root /projects/acme   # discover repos, write config
 $EDITOR cartographer.yaml                 # add aliases — this matters most
 cartographer scan                         # build the graph (~seconds)
 cartographer questions                    # what to ask your team

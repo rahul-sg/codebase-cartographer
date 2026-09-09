@@ -32,8 +32,8 @@ def build(root):
     S = os.path.join(root, "backend-repo")
     srv = os.path.join(S, "server")
 
-    # ---------------- parent pom: reactor list omits logistics + interop ----
-    reactor = ["gcutil", "cache", "kafkautil", "framework", "auth", "misc",
+    # ---------------- parent pom: reactor list omits logistics + gateway ----
+    reactor = ["corelib", "cache", "msglib", "framework", "auth", "misc",
                "common", "catalog", "company", "order", "comment",
                "notification", "nexus", "agent", "order-legacy"]
     w(srv + "/pom.xml", """<?xml version="1.0"?>
@@ -70,20 +70,20 @@ def build(root):
 </project>
 """ % (parent, gid, name, dep_xml)
 
-    libs = {"gcutil": (), "cache": (), "kafkautil": (), "auth": ("cache",),
-            "framework": ("cache", "gcutil"), "misc": ("kafkautil",)}
+    libs = {"corelib": (), "cache": (), "msglib": (), "auth": ("cache",),
+            "framework": ("cache", "corelib"), "misc": ("msglib",)}
     services = {
-        "common":           ("cmndev", ("auth", "framework", "cache", "kafkautil", "gcutil", "misc")),
-        "company":          ("cmnydev", ("framework", "cache", "kafkautil", "misc")),
-        "order":            ("orddev", ("framework", "cache", "kafkautil", "common")),
-        "catalog":          ("ctlgdev", ("framework", "cache", "kafkautil")),
+        "common":           ("cmndev", ("auth", "framework", "cache", "msglib", "corelib", "misc")),
+        "company":          ("cmnydev", ("framework", "cache", "msglib", "misc")),
+        "order":            ("orddev", ("framework", "cache", "msglib", "common")),
+        "catalog":          ("ctlgdev", ("framework", "cache", "msglib")),
         "comment":          ("cmtdev", ("framework", "cache")),
-        "notification":     ("notifdev", ("framework", "kafkautil")),
+        "notification":     ("notifdev", ("framework", "msglib")),
         "nexus":            ("cmndev", ("framework", "cache")),   # shares common's schema
         "agent":            ("emailagentdev", ("framework", "cache")),
-        "order-legacy": ("omedev", ("framework", "kafkautil")),
+        "order-legacy": ("omedev", ("framework", "msglib")),
     }
-    outside = {"logistics": "logdev", "interoperability": "intopdev"}
+    outside = {"logistics": "logdev", "gateway": "gatewaydev"}
 
     for lib, deps in libs.items():
         w("%s/%s/pom.xml" % (srv, lib), module_pom(lib, deps))
@@ -98,7 +98,7 @@ def build(root):
     for svc in outside:
         # logistics: written like a child but excluded from <modules>
         w("%s/%s/pom.xml" % (srv, svc),
-          module_pom(svc, ("framework",), standalone=(svc == "interoperability")))
+          module_pom(svc, ("framework",), standalone=(svc == "gateway")))
         w("%s/%s/Dockerfile" % (srv, svc), "FROM eclipse-temurin:21\n")
         w("%s/%s/deployHelm/values.yaml" % (srv, svc), "replicaCount: 2\n")
 
@@ -121,8 +121,8 @@ public class KafkaConstants {
     }
 }
 """)
-    w(srv + "/kafkautil/src/main/java/com/acme/kafkautil/util/TopicNameCreator.java",
-      """package com.acme.kafkautil.util;
+    w(srv + "/msglib/src/main/java/com/acme/msglib/util/TopicNameCreator.java",
+      """package com.acme.msglib.util;
 
 public class TopicNameCreator {
     public String createTopicName(Object name) { return env + "." + name; }
@@ -134,7 +134,7 @@ public class TopicNameCreator {
       """package com.acme.order;
 
 import com.acme.misc.kafka.KafkaConstants;
-import com.acme.kafkautil.util.TopicNameCreator;
+import com.acme.msglib.util.TopicNameCreator;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 public class OrderService {
@@ -311,7 +311,7 @@ openai.api.key=sk-proj-NOTAREALKEYbutShapedLikeOne1234567890
     w(D + "/local/docker-compose.yml", """version: "3"
 services:
   mysqldb:
-    image: gcr.io/dev-sqe-uat/ong_mysql_db
+    image: gcr.io/acme-dev/acme_mysql_db
     ports: ["3306:3306"]
   redis:
     image: redis
@@ -357,7 +357,7 @@ services:
   "/agent/": { "target": "https://api.sqe.acme.test" },
   "/logistics/": { "target": "https://logistics.sqe.acme.test" },
   "/contract/v1/": { "target": "https://contracts.sqe.acme.test" },
-  "/interoperability/": { "target": "https://api.sqe.acme.test" },
+  "/gateway/": { "target": "https://api.sqe.acme.test" },
   "/rfq-agent/": { "target": "https://agents.sqe.acme.test" }
 }""")
     w(U + "/ui/src/app/core/utils/sso.util.ts", """
@@ -405,8 +405,8 @@ export const ANDROID_EMULATOR = 'http://10.0.2.2:9480';
         subprocess.run(["git", "config", "user.name", "t"], cwd=d)
         subprocess.run(["git", "add", "-A"], cwd=d, stdout=subprocess.DEVNULL)
         env = dict(os.environ, GIT_AUTHOR_NAME="Dana Reyes",
-                   GIT_AUTHOR_EMAIL="d@itn.test", GIT_COMMITTER_NAME="Dana Reyes",
-                   GIT_COMMITTER_EMAIL="d@itn.test",
+                   GIT_AUTHOR_EMAIL="d@example.test", GIT_COMMITTER_NAME="Dana Reyes",
+                   GIT_COMMITTER_EMAIL="d@example.test",
                    GIT_AUTHOR_DATE="2026-03-01T10:00:00",
                    GIT_COMMITTER_DATE="2026-03-01T10:00:00")
         subprocess.run(["git", "commit", "-qm", "TICKET-1000 initial"], cwd=d,
@@ -415,4 +415,4 @@ export const ANDROID_EMULATOR = 'http://10.0.2.2:9480';
 
 
 if __name__ == "__main__":
-    print(build(os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else "/tmp/itn")))
+    print(build(os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else "/tmp/cartographer-fixture")))

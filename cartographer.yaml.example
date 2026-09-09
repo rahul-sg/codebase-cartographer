@@ -2,7 +2,7 @@
 # `cartographer init --root <dir>` generates this for you.
 
 roots:
-  - /projects/ong          # a directory CONTAINING your service repos
+  - /projects/acme          # a directory CONTAINING your service repos
 
 defaults:
   history_months: 12       # git history window
@@ -16,7 +16,7 @@ defaults:
 # across code, config and image tags; every alias you add sharpens the map.
 services:
   - name: order-svc
-    repo: /projects/ong/order-svc
+    repo: /projects/acme/order-svc
     aliases: [OrderService, ORDER_SVC, order-service]
     purpose: "Owns the order lifecycle from submission to fulfillment."
     owns_data: [orders, order_lines]

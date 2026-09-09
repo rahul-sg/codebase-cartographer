@@ -151,6 +151,17 @@ CREATE TABLE IF NOT EXISTS gaps (
     hint     TEXT,
     source   TEXT
 );
+
+-- Per-file parse results, keyed by content hash, so an unchanged file is not
+-- re-parsed. Parsing is 96% of the symbol extractor's cost; call RESOLUTION is
+-- the other 4% and is deliberately NOT cached, because a call edge depends on
+-- the whole symbol index and would go stale the moment any other file changed.
+CREATE TABLE IF NOT EXISTS parse_cache (
+    key      TEXT PRIMARY KEY,   -- repo + lang + relative path
+    hash     TEXT NOT NULL,      -- sha256 of file bytes
+    payload  TEXT NOT NULL,      -- nodes/edges/defined/fn_defs/calls as JSON
+    seen_at  TEXT
+);
 """
 
 
@@ -230,6 +241,59 @@ class Store:
 
     def all_meta(self):
         return {r["key"]: r["value"] for r in self.conn.execute("SELECT * FROM meta")}
+
+    def git_map(self):
+        """
+        `build unit -> git repo name`, as recorded by the last scan.
+
+        Kept in `meta` rather than as a column on every node: the mapping is
+        one entry per unit, it is derived from the filesystem rather than from
+        any file's content, and storing it here means both levels are available
+        without migrating a 175k-row table.
+        """
+        raw = self.get_meta("unit_to_git")
+        if not raw:
+            return {}
+        try:
+            got = json.loads(raw)
+            return got if isinstance(got, dict) else {}
+        except (ValueError, TypeError):
+            return {}
+
+    def git_repo_of(self, unit):
+        """The git repo for a unit, falling back to the unit's own name."""
+        return self.git_map().get(unit, unit)
+
+    # -- parse cache -------------------------------------------------------
+
+    def parse_cache_all(self):
+        """`key -> (hash, payload_json)` for every cached file."""
+        return {r["key"]: (r["hash"], r["payload"])
+                for r in self.conn.execute(
+                    "SELECT key, hash, payload FROM parse_cache")}
+
+    def parse_cache_put(self, rows):
+        """rows: iterable of (key, hash, payload_json)."""
+        self.conn.executemany(
+            "INSERT INTO parse_cache(key,hash,payload,seen_at) "
+            "VALUES(?,?,?,?) ON CONFLICT(key) DO UPDATE SET "
+            "hash=excluded.hash, payload=excluded.payload, "
+            "seen_at=excluded.seen_at",
+            [(k, h, p, _now()) for k, h, p in rows])
+
+    def parse_cache_prune(self, keep_keys):
+        """
+        Drop entries for files that no longer exist.
+
+        Without this the cache grows forever and, worse, a deleted file's
+        symbols would keep being re-added from cache on every scan.
+        """
+        have = {r["key"] for r in self.conn.execute("SELECT key FROM parse_cache")}
+        stale = have - set(keep_keys)
+        if stale:
+            self.conn.executemany("DELETE FROM parse_cache WHERE key=?",
+                                  [(k,) for k in stale])
+        return len(stale)
 
     # -- writes ------------------------------------------------------------
 

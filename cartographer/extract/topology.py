@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 import re
 
-from .. import ids
+from .. import ids, langs
 from ..config import SKIP_DIRS, prune, datastore_id
 
 SOURCE = "topology"
@@ -97,6 +97,104 @@ MAPPING_PATH = re.compile(r"""(?:^|[\s(,])(?:value|path)\s*=\s*\{?\s*["']([^"']*
 MAPPING_BARE = re.compile(r"""^\s*\{?\s*["']([^"']*)["']""")
 MAPPING_METHOD = re.compile(r"RequestMethod\.(\w+)", re.I)
 
+# `public static final String API_BASEPATH_V1 = "/v1/api";`
+STRING_CONST = re.compile(
+    r"""\b(?:public|private|protected)?\s*(?:static\s+)?final\s+String\s+"""
+    r"""(?P<name>[A-Z][A-Z0-9_]*)\s*=\s*"(?P<val>[^"]*)"\s*;""")
+
+# The argument of a mapping annotation, as an expression rather than a literal:
+# `ApiPaths.API_BASEPATH_V1 + "/as2transmission"`. Terms are string literals
+# or constant references; anything else makes the expression unresolvable.
+_EXPR_TERM = re.compile(r"""\s*(?:"([^"]*)"|'([^']*)'|([A-Za-z_][\w.]*))\s*$""")
+
+
+def string_constants(text):
+    """
+    `NAME -> "value"` for the String constants declared in one file.
+
+    Keyed by simple name, because call sites reference them either bare or
+    qualified (`ApiPaths.API_BASEPATH_V1`) and the qualifier is not worth
+    resolving properly for this purpose. A name declared twice with two
+    different values is dropped rather than guessed at -- see `merge_constants`.
+    """
+    out = {}
+    for m in STRING_CONST.finditer(text or ""):
+        out[m.group("name")] = m.group("val")
+    return out
+
+
+def merge_constants(into, more):
+    """
+    Fold one file's constants into the shared table.
+
+    Same name + same value in several classes is common and harmless
+    (`API_BASEPATH_V1 = "/v1/api"` is declared in three modules here). Same
+    name + different values is genuinely ambiguous, so the entry is poisoned to
+    None and later treated as unresolvable: a wrong base path silently
+    misfiles every route in a controller.
+    """
+    for k, v in (more or {}).items():
+        if k in into and into[k] != v:
+            into[k] = None
+        else:
+            into.setdefault(k, v)
+    return into
+
+
+def _resolve_expr(args, constants):
+    """
+    Evaluate a mapping annotation argument that is a `+` concatenation of
+    string literals and String constants. Returns None when any term cannot be
+    resolved, so the caller can fall back rather than emit a half path.
+    """
+    if not args:
+        return None
+    expr = args.strip()
+    # Only the leading `value =` / `path =` form carries a path; a bare
+    # expression is the path itself.
+    m = re.match(r"""(?:value|path)\s*=\s*(.+)$""", expr, re.I | re.S)
+    if m:
+        expr = m.group(1).strip()
+    expr = expr.strip("{} \t")
+    # Spring accepts several paths: `@RequestMapping({A + "/alertSettings",
+    # A + "/notifications"})`. Splitting the whole thing on `+` produces a term
+    # containing a comma, which resolves to nothing and drops the prefix
+    # entirely. Take the first path -- the same choice the literal-array
+    # pattern already makes -- rather than losing the base path for every
+    # method in the controller.
+    #
+    # A comma inside a term is impossible here: terms are string literals and
+    # dotted constant references, neither of which can contain one.
+    if "," in expr:
+        expr = expr.split(",")[0].strip()
+    if "+" not in expr:
+        return None                    # a plain literal is handled elsewhere
+    parts = []
+    for term in expr.split("+"):
+        tm = _EXPR_TERM.match(term)
+        if not tm:
+            return None
+        lit = tm.group(1) if tm.group(1) is not None else tm.group(2)
+        if lit is not None:
+            parts.append(lit)
+            continue
+        ref = tm.group(3)
+        if not ref:
+            return None
+        val = constants.get(ref.split(".")[-1]) if constants else None
+        if not val:                    # unknown, or poisoned by ambiguity
+            return None
+        parts.append(val)
+    return "".join(parts) if parts else None
+
+
+def _mapping_path(args, constants):
+    """Path from a mapping annotation's arguments, literal or expression."""
+    pm = MAPPING_PATH.search(args) or MAPPING_BARE.match(args)
+    if pm:
+        return pm.group(1)
+    return _resolve_expr(args, constants)
+
 # Cache usage is annotation-mediated here, so direct RedisTemplate calls are
 # rare and grepping for them finds almost nothing.
 CACHE_ANN = re.compile(r"@(\w*Redis\w*Cacheable|Cacheable|CacheEvict|CachePut)\b")
@@ -117,13 +215,20 @@ apache.org spring.io localhost.localdomain host.docker.internal
 """.split())
 
 
-def spring_routes(text):
+def spring_routes(text, constants=None):
     """
     Compose full HTTP paths from class-level + method-level annotations.
 
     Returns [(verb, path, line)]. A controller with no class-level mapping
     still works; the prefix is simply empty.
+
+    `constants` is the repo-wide String-constant table. Without it a class
+    mapping written as `@RequestMapping(ApiPaths.API_BASEPATH_V1 + "/x")`
+    cannot be resolved, the prefix falls back to empty, and every method in
+    that controller is recorded at the wrong path -- which is the majority of
+    controllers in a codebase that keeps its base paths in a constants class.
     """
+    constants = constants or {}
     if not CONTROLLER_ANN.search(text):
         return []
     lines = text.split("\n")
@@ -136,13 +241,33 @@ def spring_routes(text):
         return []
 
     prefix = ""
-    for i in range(max(0, class_line - 12), class_line):
-        m = MAPPING_ANY.search(lines[i])
-        if m and m.group(1).lower() == "request":
-            args = m.group("args") or ""
-            pm = MAPPING_PATH.search(args) or MAPPING_BARE.match(args)
-            if pm:
-                prefix = pm.group(1)
+    # Search the whole header block at once rather than line by line: a class
+    # mapping is often spread over several lines
+    #
+    #     @RequestMapping({
+    #             ApiPaths.API_BASEPATH_V1 + "/users/preferences",
+    #             ApiPaths.API_BASEPATH_V1 + "/users/notifications"
+    #     })
+    #
+    # and a per-line regex needing the closing paren on the same line sees
+    # nothing, silently dropping the base path for every method in the class.
+    header_lines = []
+    for i in range(max(0, class_line - 14), class_line):
+        raw = lines[i]
+        stripped = raw.lstrip()
+        # Drop comments. `MAPPING_ANY` makes the argument list optional, so a
+        # javadoc line merely mentioning "@RequestMapping" would otherwise be
+        # taken as the annotation.
+        if stripped.startswith(("*", "//", "/*")):
+            continue
+        header_lines.append(raw)
+    header = "\n".join(header_lines)
+    for m in MAPPING_ANY.finditer(header):
+        if m.group(1).lower() != "request":
+            continue
+        got = _mapping_path(m.group("args") or "", constants)
+        if got:
+            prefix = got
             break
 
     out = []
@@ -158,8 +283,7 @@ def spring_routes(text):
             verb = mm.group(1).upper() if mm else "ANY"
         else:
             verb = kind.upper()
-        pm = MAPPING_PATH.search(args) or MAPPING_BARE.match(args)
-        sub = pm.group(1) if pm else ""
+        sub = _mapping_path(args, constants) or ""
         full = "/" + "/".join(
             seg for seg in (prefix + "/" + sub).split("/") if seg)
         out.append((verb, full or "/", i + 1))
@@ -202,9 +326,45 @@ def _clean_host(h):
     return h
 
 
+def _constants_prepass(repos, follow=False):
+    """
+    Repo-wide String constants, gathered before any route is composed.
+
+    Base paths are habitually kept in a constants class and referenced from
+    controllers in other modules (`framework`'s `ApiPaths.API_BASEPATH_V1`
+    is used by `order`), so this cannot be done per file while walking. Rather
+    than read every Java file twice, only the files whose names say they hold
+    constants are pre-read; a constant declared inside a controller is picked
+    up from that controller's own text at composition time.
+    """
+    table = {}
+    for _name, root, _svc in repos:
+        if not os.path.isdir(root):
+            continue
+        for dirpath, dirnames, filenames in os.walk(root, followlinks=follow):
+            prune(dirpath, dirnames)
+            for fn in filenames:
+                low = fn.lower()
+                if not low.endswith((".java", ".kt")):
+                    continue
+                if "constant" not in low and "apipath" not in low:
+                    continue
+                p = os.path.join(dirpath, fn)
+                try:
+                    if os.path.getsize(p) > MAX_BYTES:
+                        continue
+                    with open(p, "r", encoding="utf-8", errors="replace") as fh:
+                        merge_constants(table, string_constants(fh.read()))
+                except OSError:
+                    continue
+    return table
+
+
 def run(store, cfg, repos, progress=None):
     """repos: list of (repo_name, repo_root, service_name)."""
     store.clear_source(SOURCE)
+    const_table = _constants_prepass(
+        repos, cfg.defaults.get("follow_symlinks", False))
 
     services = {}          # canonical name -> node dict
     edges = []
@@ -242,12 +402,25 @@ def run(store, cfg, repos, progress=None):
             # would look shared. Resolve the owning module per file.
             me = _module_owner(cfg, repo_root, path, svc_name or repo_name)
             ensure_service(me, repo_name)
+            # The file's own node, used as the handler for any route declared
+            # in it. Built the same way symbols.py builds file ids so the two
+            # agree; edges to ids symbols never produced are dropped later.
+            own_fid = ids.file_id(repo_name, langs.lang_of(path) or "text", rel)
 
             # Java controllers need whole-file context to compose paths.
             if path.endswith((".java", ".kt")) and "Mapping" in "\n".join(lines[:400]):
-                for verb, full, ln in spring_routes("\n".join(lines)):
+                whole = "\n".join(lines)
+                # Repo-wide constants plus any declared in this file itself.
+                local = merge_constants(dict(const_table),
+                                        string_constants(whole))
+                # The controller's own file node, so a route is not a leaf:
+                # frontend -> route -> controller -> service impl is the chain
+                # a reader actually needs to walk.
+                ctrl_fid = own_fid
+                for verb, full, ln in spring_routes(whole, local):
                     routes.append((me, verb, full,
-                                   "%s/%s:%d" % (repo_name, rel, ln)))
+                                   "%s/%s:%d" % (repo_name, rel, ln),
+                                   ctrl_fid))
 
             for i, line in enumerate(lines, start=1):
                 if not line.strip() or len(line) > 4000:
@@ -371,9 +544,10 @@ def run(store, cfg, repos, progress=None):
                 for m in ROUTE_DECOR.finditer(line):
                     verb = m.group(1).upper()
                     routes.append((me, "ANY" if verb == "ROUTE" else verb,
-                                   m.group(2), ev))
+                                   m.group(2), ev, own_fid))
                 for m in ROUTE_EXPRESS.finditer(line):
-                    routes.append((me, m.group(1).upper(), m.group(2), ev))
+                    routes.append((me, m.group(1).upper(), m.group(2), ev,
+                                   own_fid))
 
                 # 8. cache annotations and JNDI datasources
                 cm = CACHE_ANN.search(line)
@@ -444,7 +618,8 @@ def run(store, cfg, repos, progress=None):
     # -- route nodes -------------------------------------------------------
     route_nodes = []
     seen_routes = set()
-    for svc, method, pattern, ev in routes:
+    handler_edges = []
+    for svc, method, pattern, ev, ctrl_fid in routes:
         key = (svc, method, pattern)
         if key in seen_routes:
             continue
@@ -455,6 +630,23 @@ def run(store, cfg, repos, progress=None):
                             "service": svc})
         edges.append(_edge_raw(ids.service_id(svc), rid, "exposes", ev,
                                "EXTRACTED", 0.95, pattern))
+        if ctrl_fid:
+            handler_edges.append(
+                _edge_raw(rid, ctrl_fid, "handled-by", ev,
+                          "EXTRACTED", 0.95, pattern))
+
+    # Only keep handler edges whose file node the symbol extractor actually
+    # produced. It skips generated and oversized files, and an edge into a
+    # node that does not exist would be a dead end in every path query.
+    if handler_edges:
+        want = {e["dst"] for e in handler_edges}
+        have = set()
+        rows = store.conn.execute(
+            "SELECT id FROM nodes WHERE kind='file'")
+        for r in rows:
+            if r["id"] in want:
+                have.add(r["id"])
+        edges.extend(e for e in handler_edges if e["dst"] in have)
 
     # cache + JNDI as first-class infrastructure edges
     for svc, anns in cache_use.items():

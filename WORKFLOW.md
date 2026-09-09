@@ -118,8 +118,8 @@ tools do you have?" — you should get eleven.
 ### Step 1: point it at the repos
 
 ```bash
-cd /projects/ong
-cartographer init --root /projects/ong
+cd /projects/acme
+cartographer init --root /projects/acme
 ```
 
 This writes `cartographer.yaml` listing every repo it found.
@@ -128,13 +128,13 @@ This writes `cartographer.yaml` listing every repo it found.
 
 **This is the highest-leverage twenty minutes you will spend on the whole
 tool.** The map is only as good as its ability to recognise that `order-svc`,
-`orders`, `OrderService`, `ORDER_SERVICE_URL` and `itn/order-svc:latest` all
+`orders`, `OrderService`, `ORDER_SERVICE_URL` and `acme/order-svc:latest` all
 name one thing.
 
 ```yaml
 services:
   - name: order-svc
-    repo: /projects/ong/order-svc
+    repo: /projects/acme/order-svc
     aliases: [OrderService, ORDER_SVC, order-service, oms-order]
     purpose: "Owns the order lifecycle from submission to fulfillment."
     owns_data: [orders, order_lines]
@@ -145,8 +145,8 @@ suffixes (`-svc`, `-service`, `-api`) and Docker image tags automatically. You
 only need to add spellings it could not guess — internal codenames, legacy
 names, abbreviations.
 
-**Also add the services whose repos you do NOT have.** You said `/projects/ong`
-holds four or five of fifteen-plus. Listing the others by name means edges
+**Also add the services whose repos you do NOT have.** You said `/projects/acme`
+holds only a handful of the services that exist. Listing the others by name means edges
 pointing at them resolve into real nodes instead of being dropped:
 
 ```yaml
@@ -252,7 +252,7 @@ Just say what you are doing:
 > "I need to add a discount override to order submission. Where does that live?"
 
 Claude calls `repo_map` with your task, gets the ranked files, and reads the
-right ones. Compare that to grepping blindly across fifteen repos.
+right ones. Compare that to grepping blindly across a dozen-plus repos.
 
 You can also run it yourself:
 
@@ -365,7 +365,7 @@ The tool is careful, but you are the one whose credibility is on the line.
 
 - *"No edge found" is not "safe to change."* The dependent may be in a repo you
   do not have, or reached by reflection, DI, a mesh, or config.
-- *You can see 4–5 of 15+ repos.* Say "among the repos I can see". The
+- *You can only see a handful of a dozen-plus repos.* Say "among the repos I can see". The
   difference matters and stating it builds trust rather than eroding it.
 - *Complexity here is a branch-keyword proxy*, not real cyclomatic complexity.
   Fine for ranking hotspots, not a metric to quote at people.
@@ -397,15 +397,17 @@ you *where*; only reading tells you *what*.
 
 ## Part 8b — What to expect at your scale
 
-Measured on a synthetic 15-service, 3,300-file Java estate (28 MB of source),
-which is roughly the shape of an OMS:
+These figures are illustrative, not a benchmark from any particular run — actual
+timings depend on estate size, hardware, and how much git history there is to
+walk. As a rough shape, for a multi-service Java estate with a few thousand
+source files:
 
 | Operation | Time |
 |---|---|
-| Full `scan` (symbols, topology, specs, builds, history, PageRank) | ~17 s |
-| `topology`, `questions`, `hotspots`, `find`, `impact` | under 0.3 s |
-| `map "<task>"` (recomputes personalised PageRank) | ~3 s |
-| Graph size | 39.6k nodes, 92k edges, 70 MB `graph.db` |
+| Full `scan` (symbols, topology, specs, builds, history, PageRank) | seconds to tens of seconds |
+| `topology`, `questions`, `hotspots`, `find`, `impact` | well under a second |
+| `map "<task>"` (recomputes personalised PageRank) | a few seconds |
+| Graph size | tens of thousands of nodes and edges, tens of MB `graph.db` |
 
 So: scan once in the morning or after a big pull, and every query after that is
 effectively instant. The interactive HTML caps at the 1,200 most central nodes

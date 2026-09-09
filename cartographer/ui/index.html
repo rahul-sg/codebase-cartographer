@@ -14,6 +14,7 @@
   <nav id="views">
     <button data-view="map"      class="on" title="Hierarchical graph — drill from estate to line">Map</button>
     <button data-view="layers"   title="3D layered architecture">Layers</button>
+    <button data-view="arch"     title="Runtime architecture — services, calls, queues and stores">Architecture</button>
     <button data-view="data"     title="Tables × services — who reads and writes what">Data</button>
     <button data-view="flow"     title="Follow one entity end to end">Flow</button>
     <button data-view="impact"   title="Blast radius of a change">Impact</button>
@@ -28,9 +29,37 @@
     <div id="results" hidden></div>
   </div>
 
+  <button id="helpBtn" class="icon" title="Keyboard shortcuts (?)">?</button>
   <button id="themeBtn" class="icon" title="Toggle theme">◐</button>
   <div id="status" class="status" title="Graph freshness">—</div>
 </header>
+
+<!-- Every one of these already worked; none of them were discoverable. -->
+<div id="shortcuts" hidden>
+  <div class="sc-card">
+    <h3>Keyboard &amp; mouse</h3>
+    <table>
+      <tr><td><kbd>R</kbd></td><td>Reset — clear selection, back to the whole estate</td></tr>
+      <tr><td><kbd>Esc</kbd></td><td>Clear selection (un-dim the graph)</td></tr>
+      <tr><td><kbd>F</kbd></td><td>Fit to view</td></tr>
+      <tr><td><kbd>Backspace</kbd></td><td>Go up one level</td></tr>
+      <tr><td><kbd>Space</kbd></td><td>Pause layout / stop the 3D spin</td></tr>
+      <tr><td><kbd>/</kbd></td><td>Search</td></tr>
+      <tr><td><kbd>?</kbd></td><td>This panel</td></tr>
+      <tr><td colspan="2" class="sc-sep">Layers tab</td></tr>
+      <tr><td><kbd>↑</kbd> <kbd>↓</kbd></td><td>Move the camera between floors</td></tr>
+      <tr><td>layer name</td><td>Point the camera at that floor (left panel)</td></tr>
+      <tr><td>only</td><td>Isolate one floor — the fastest way to read the estate</td></tr>
+      <tr><td colspan="2" class="sc-sep">Mouse</td></tr>
+      <tr><td>click</td><td>Select a node — everything unrelated dims</td></tr>
+      <tr><td>double-click</td><td>Drill into a node</td></tr>
+      <tr><td>drag</td><td>Map: pan · Layers: orbit</td></tr>
+      <tr><td>right-drag</td><td>Layers: pan (also shift-drag)</td></tr>
+      <tr><td>scroll</td><td>Zoom</td></tr>
+    </table>
+    <p class="muted">Click anywhere to close.</p>
+  </div>
+</div>
 
 <div id="crumbbar">
   <div id="crumbs"></div>
@@ -45,6 +74,29 @@
       <div id="filters" class="filters"></div>
       <label class="row"><input type="checkbox" id="hideInferred"> hide inferred (unverified)</label>
       <label class="row"><input type="checkbox" id="hideLibs" checked> hide third-party libraries</label>
+      <label class="row"><input type="checkbox" id="simplify"> simplify — hide dead ends <span id="prunedN" class="hint"></span></label>
+    </section>
+
+    <section class="panel" id="repoPanel">
+      <h3>Repositories</h3>
+      <label class="row"><input type="checkbox" id="colorByRepo" checked> colour nodes by repository</label>
+      <div class="hint">
+        Untick to narrow a crowded view. Shared things (topics, tables,
+        libraries) stay visible while anything they still connect to is shown.
+        For data coupling between services, use the <strong>Data</strong> tab.
+      </div>
+      <label class="row"><input type="checkbox" id="crossRepo" checked> highlight cross-repo links</label>
+      <div id="repoList" class="filters"></div>
+    </section>
+
+    <section class="panel" id="layerPanel" hidden>
+      <h3>Layers</h3>
+      <div class="hint">
+        Click a layer name to point the camera at it — orbiting then keeps that
+        floor centred instead of swinging it off screen. Untick to hide it.
+      </div>
+      <div id="layerList" class="filters"></div>
+      <button id="allLayers" class="linkbtn">Show all layers &amp; frame them</button>
     </section>
 
     <section class="panel" id="legendPanel">
@@ -67,10 +119,11 @@
       <p>Run <code>cartographer scan</code> in your workspace, then reload.</p>
     </div>
     <div id="stagectl">
-      <button id="zoomIn"  title="Zoom in">+</button>
-      <button id="zoomOut" title="Zoom out">−</button>
-      <button id="fit"     title="Fit to view">⤢</button>
-      <button id="freeze"  title="Pause/resume layout">❚❚</button>
+      <button id="zoomIn"  title="Zoom in (+)">+</button>
+      <button id="zoomOut" title="Zoom out (−)">−</button>
+      <button id="fit"     title="Fit to view (F)">⤢</button>
+      <button id="freeze"  title="Pause/resume layout (Space)">❚❚</button>
+      <button id="reset"   title="Reset — clear selection, back to the whole estate (R)">⟲</button>
     </div>
   </div>
 
@@ -87,6 +140,17 @@
     </div>
   </aside>
 </main>
+
+<footer id="foot">
+  <span>cartographer</span>
+  <span class="sep">·</span>
+  <span>&copy; <span id="footYear">2026</span> Rahul Sengupta</span>
+  <span class="sep">·</span>
+  <span class="muted">Every edge is evidence-backed; anything marked
+    <span class="inf">inferred</span> is a name match, not a fact.</span>
+  <span class="spacer"></span>
+  <span class="muted" id="footStamp"></span>
+</footer>
 
 <script src="/graph2d.js"></script>
 <script src="/graph3d.js"></script>

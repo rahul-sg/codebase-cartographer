@@ -1,5 +1,5 @@
 """
-Hierarchical aggregation: the thing that makes a 145,000-node graph readable.
+Hierarchical aggregation: the thing that makes a six-figure-node graph readable.
 
 Rendering every node at once produces a grey hairball -- not slow, illegible.
 Nobody learns anything from it. So the graph is collapsed to whichever level
@@ -21,8 +21,9 @@ from collections import defaultdict
 
 # Node kinds that are actors in their own right at estate level. Shared
 # libraries are included deliberately: `framework` and `cache` are compiled
-# into 17 modules, and collapsing them into their repo would both hide that
-# and invent a phantom service named after the repository.
+# into many modules across the estate, and collapsing them into their repo
+# would both hide that and invent a phantom service named after the
+# repository.
 TOP_KINDS = ("service", "topic", "datastore", "host", "infra", "legacy-page",
              "library")
 # Kinds that live inside a service and get rolled up into it.
@@ -47,6 +48,10 @@ EDGE_STYLE = {
     "calls": {"kind": "code", "weight": 2},
     "imports": {"kind": "code", "weight": 1},
     "extends": {"kind": "code", "weight": 1},
+    # Interface -> implementation. The reciprocal of `extends`, kept explicit
+    # because traversal is directed and a caller holding an interface needs to
+    # reach the class that implements it.
+    "implemented-by": {"kind": "code", "weight": 2},
     "defines": {"kind": "structure", "weight": 1},
     "reads-table": {"kind": "data", "weight": 2},
     "writes-table": {"kind": "data", "weight": 3},
@@ -55,6 +60,12 @@ EDGE_STYLE = {
     "uses-cache": {"kind": "data", "weight": 1},
     "uses-library": {"kind": "build", "weight": 1},
     "exposes": {"kind": "contract", "weight": 1},
+    # A frontend file calling a declared endpoint: the contract actually being
+    # consumed, which is heavier evidence than the contract merely existing.
+    "calls-route": {"kind": "contract", "weight": 3},
+    # The controller that answers a route. Without it a route is a leaf and no
+    # path can run from a UI call site to the code that serves it.
+    "handled-by": {"kind": "contract", "weight": 2},
     "routes-to": {"kind": "deploy", "weight": 1},
     "links-to": {"kind": "legacy", "weight": 1},
 }
@@ -89,7 +100,7 @@ def _service_of(n):
 def _package_of(n, depth):
     """
     Directory prefix `depth` levels deep, ignoring conventional Java scaffolding
-    so `src/main/java/com/itn/order/dao/X.java` groups as `order/dao` rather
+    so `src/main/java/com/acme/order/dao/X.java` groups as `order/dao` rather
     than everything collapsing into `src`.
     """
     path = n.get("file") or ""
@@ -116,6 +127,11 @@ def graph(store, level="estate", focus=None, package=None, limit=400,
     """
     nodes = _all_nodes(store)
     ranks = _ranks(store)
+    global _GIT_MAP
+    try:
+        _GIT_MAP = store.git_map() or {}
+    except Exception:
+        _GIT_MAP = {}
 
     if level == "estate":
         return _estate(store, nodes, ranks, limit, include, min_confidence)
@@ -160,20 +176,35 @@ def _rollup(store, nodes, member_of, keep, include, min_confidence):
         if ex.get("runtime"):
             rec["runtime"] = True
             rec["calls"] = max(rec["calls"], ex.get("calls") or 0)
-        if len(rec["samples"]) < 6 and r["evidence"]:
-            rec["samples"].append({
-                "evidence": r["evidence"], "via": ex.get("via"),
-                "src": r["src"], "dst": r["dst"],
-                "provenance": r["provenance"]})
+        # One short citation per rolled-up edge, evidence text only.
+        #
+        # This previously kept up to SIX sample objects each embedding the full
+        # src and dst node ids -- 4.3 MB of a 6.3 MB package-level response,
+        # 68% of the payload, for a field no consumer reads: the UI, the
+        # reports and the MCP server all ignore it, and edge detail is fetched
+        # on demand from /api/edge. Keeping one evidence string preserves the
+        # "every edge can cite something" property at ~5% of the cost.
+        if not rec["samples"] and r["evidence"]:
+            rec["samples"].append({"evidence": r["evidence"],
+                                   "via": ex.get("via")})
     return list(agg.values())
+
+
+_GIT_MAP = {}
 
 
 def _pack(n, ranks, extra=None):
     ex = _extra(n)
+    unit = n.get("repo")
     out = {
         "id": n["id"], "kind": n["kind"],
         "label": n.get("name") or (n.get("file") or "").split("/")[-1] or n["id"],
-        "service": n.get("service"), "repo": n.get("repo"),
+        "service": n.get("service"), "repo": unit,
+        # The build unit and the git repository are different levels. Both are
+        # sent: `repo` is the unit a file belongs to, `git_repo` is the
+        # checkout it is pulled with. Grouping by the former calls 26 Maven
+        # modules 26 repositories.
+        "git_repo": _GIT_MAP.get(unit, unit),
         "file": n.get("file"), "line": n.get("line"),
         "container": n.get("container"), "lang": n.get("lang"),
         "rank": round(ranks.get(n["id"], 0.0), 6),
@@ -255,6 +286,11 @@ def _pick_depth(nodes, svc, want_min=4, want_max=45):
 def _service(store, nodes, ranks, focus, limit, include, min_confidence):
     """One service: its packages, plus the neighbours it talks to."""
     svc = focus
+    if svc and not any(_service_of(n) == svc for n in nodes.values()):
+        # A typo'd or stale service name otherwise renders a blank canvas that
+        # looks exactly like a service with nothing in it.
+        raise ValueError("no service %r in the graph -- run `cartographer "
+                         "stats` for the list" % svc)
     depth = _pick_depth(nodes, svc)
     member_of = {}
     groups = {}
@@ -317,6 +353,13 @@ def _service(store, nodes, ranks, focus, limit, include, min_confidence):
 def _package(store, nodes, ranks, focus, package, limit, include, min_confidence):
     """Inside one package: its files, plus boundary nodes for what they touch."""
     svc = focus
+    if not svc:
+        raise ValueError("level=package needs focus=<service>")
+    # Must be the SAME depth `_service` used to build the package ids the
+    # caller is drilling into, or `pkg != package` never matches and the view
+    # comes back empty. `_pick_depth` is deterministic for a given service, so
+    # recomputing it here reproduces that value exactly.
+    depth = _pick_depth(nodes, svc)
     member_of, groups = {}, {}
     for nid, n in nodes.items():
         owner = _service_of(n)
@@ -374,10 +417,15 @@ def _package(store, nodes, ranks, focus, package, limit, include, min_confidence
 
 def _file(store, nodes, ranks, focus, limit, include, min_confidence):
     """The symbols in one file, and the things they reach."""
+    if not focus:
+        raise ValueError("level=file needs focus=<file node id>")
     fnode = nodes.get(focus)
     if not fnode:
-        return {"level": "file", "focus": focus, "nodes": [], "edges": [],
-                "breadcrumb": [], "stats": {}}
+        # Returning an empty graph here is indistinguishable from a file that
+        # genuinely has no symbols, so the caller cannot tell a bad id from a
+        # real answer. Fail loudly instead.
+        raise ValueError("no node with id %r -- use /api/search to find it"
+                         % focus)
     path, repo = fnode.get("file"), fnode.get("repo")
     member_of, groups = {}, {}
     for nid, n in nodes.items():

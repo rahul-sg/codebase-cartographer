@@ -204,13 +204,21 @@ def loads(text):
         return out
 
     def _looks_scalar(item):
-        """`- http://x` has a colon but is not a mapping."""
-        k, sep, _ = item.partition(":")
-        if not sep:
+        """A colon only opens a mapping when it is followed by whitespace or
+        end of line (YAML spec). So `- http://x` and
+        `- db_uri=jdbc:mysql://host:3306/db` are plain scalars, while
+        `- name: x` is a mapping.
+
+        The previous heuristic tested whether the text before the first colon
+        contained a space or slash, which misclassified any `KEY=VALUE` item
+        whose value carried a scheme (`db_uri=jdbc:...` -> `{'db_uri=jdbc':
+        'mysql://...'}`), silently dropping it from `environment:` lists.
+        """
+        s = item.strip()
+        # A fully quoted item is a scalar even when it contains ": ".
+        if len(s) >= 2 and s[0] in "'\"" and s[-1] == s[0]:
             return True
-        if k.strip().startswith(("'", '"')):
-            return False
-        return bool(re.search(r"[\s/]", k)) or k.strip() == ""
+        return not re.search(r":(?:\s|$)", s)
 
     def parse_map(indent):
         out = {}

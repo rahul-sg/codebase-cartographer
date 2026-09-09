@@ -4,8 +4,8 @@ Maven multi-module discovery.
 The lesson this encodes, learned the hard way: **never trust
 the parent POM's <modules> list as the service inventory.** Real, deployed
 services can be deliberately excluded from the reactor and built separately.
-On ONG that is `logistics` and `interoperability` -- both live, both missed by
-a naive parent-pom scan.
+On a large multi-module estate that is `logistics` and `shipping-gateway` --
+both live, both missed by a naive parent-pom scan.
 
 So: find every pom.xml, and mark whether each is in the reactor. A module with
 its own Dockerfile or Helm chart is a deployable service regardless of what the
@@ -13,7 +13,7 @@ parent says.
 
 Also builds the inter-module dependency graph from <dependency> entries whose
 groupId matches the reactor, which is how shared libraries (framework, cache,
-kafkautil) show up as real edges rather than invisible glue.
+msglib) show up as real edges rather than invisible glue.
 """
 from __future__ import annotations
 
@@ -171,9 +171,9 @@ def _has_app_config(d):
     """
     application.properties / application.yml under src/main/resources.
 
-    On ONG this is the cleanest library-vs-service discriminator: the shared
-    libraries (gcutil, cache, kafkautil, framework, auth, elasticsearch, misc)
-    have no Spring Boot config of their own.
+    On a large multi-module estate this is the cleanest library-vs-service
+    discriminator: the shared libraries (corelib, cachelib, msglib, framework,
+    authlib, elasticsearch, misc) have no Spring Boot config of their own.
     """
     res = os.path.join(d, "src", "main", "resources")
     if not os.path.isdir(res):
@@ -227,8 +227,8 @@ def run(store, cfg, repos, progress=None):
         sig = _java_signals(d)
         app = sig["app"]
         has_cfg = _has_app_config(d)
-        # A WAR is a deployable artifact by definition -- order-enterprise and
-        # interoperability ship as WARs onto WildFly rather than as fat jars.
+        # A WAR is a deployable artifact by definition -- checkout-enterprise
+        # and shipping-gateway ship as WARs onto WildFly rather than as fat jars.
         is_war = p["packaging"] == "war"
         is_service = bool(deploy) or app or has_cfg or is_war or sig["controller"]
 

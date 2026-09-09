@@ -366,6 +366,43 @@ def prune(dirpath, dirnames):
     return dirnames
 
 
+def git_root_of(path):
+    """
+    The git repository a path belongs to, or None.
+
+    A "repo" in the scan sense is a build unit -- in a Maven multi-module
+    backend that is a module, and 26 of them share one checkout. Both levels
+    are needed and they are not the same question: modules are what own code
+    and schemas, git repos are what get pulled, branched and reviewed. Calling
+    a module a repo makes 26 units look like 26 repositories, which inflates
+    every cross-repo statistic and makes "cross-repo coupling" meaningless.
+    """
+    cur = os.path.abspath(_expand(path))
+    while True:
+        if os.path.isdir(os.path.join(cur, ".git")) or \
+           os.path.isfile(os.path.join(cur, ".git")):     # worktree/submodule
+            return cur
+        nxt = os.path.dirname(cur)
+        if nxt == cur:
+            return None
+        cur = nxt
+
+
+def git_repo_name(path):
+    root = git_root_of(path)
+    return os.path.basename(root.rstrip("/")) if root else None
+
+
+def unit_to_git_map(triples):
+    """`build unit -> git repo name` for everything being scanned."""
+    out = {}
+    for name, root, _svc in triples:
+        got = git_repo_name(root)
+        if got:
+            out[name] = got
+    return out
+
+
 def datastore_id(engine, host, schema):
     """
     One identity for a datastore, whoever spotted it.

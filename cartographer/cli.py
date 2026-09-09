@@ -2,17 +2,19 @@
 from __future__ import annotations
 
 import argparse
+import calendar
 import json
 import os
 import sys
 import time
 
-from . import __version__, config as cfgmod
+from . import __version__, ack as ackmod, config as cfgmod
 from .store import Store
 from .extract import (symbols, topology, history, specs, builddeps,
                       traces, maven, kafka, frontend, sqlschema,
-                      compose, secrets)
-from .analyze import pagerank, hotspots, impact, repomap
+                      compose, secrets, httpcalls)
+from .analyze import (pagerank, hotspots, impact, repomap, archdiff,
+                      audit as auditmod, prcheck)
 from .report import markdown as md_report, html as html_report, mermaid
 
 IS_TTY = sys.stderr.isatty()
@@ -25,6 +27,29 @@ def note(msg=""):
 
 def out(msg=""):
     sys.stdout.write(msg + "\n")
+
+
+def fmt_when(iso):
+    """
+    A stored UTC timestamp shown in this machine's local zone, labelled.
+
+    Timestamps are stored as UTC, which is right -- but printing them raw
+    makes the reader do timezone arithmetic to answer "is this scan recent?",
+    and a bare `2026-09-08T23:52:00Z` is easy to misread as local time. The
+    zone abbreviation comes from the platform rather than being hardcoded,
+    since Pacific is PDT for most of the year and PST only in winter.
+
+    Returns the input unchanged if it is not a timestamp, so "unknown" and "?"
+    pass through untouched.
+    """
+    if not iso or iso in ("unknown", "?"):
+        return iso or "unknown"
+    try:
+        parsed = time.strptime(iso, "%Y-%m-%dT%H:%M:%SZ")
+        return time.strftime("%Y-%m-%d %H:%M %Z",
+                             time.localtime(calendar.timegm(parsed)))
+    except (ValueError, OverflowError):
+        return iso
 
 
 def _repos_for(cfg, only=None):
@@ -202,7 +227,7 @@ def cmd_init(args):
         """
         Suggest a module for an unmatched proxy prefix.
 
-        `/omsenterprise/` and `order-enterprise` share no exact form but one
+        `/pmsenterprise/` and `pricing-enterprise` share no exact form but one
         clearly means the other, so fall back to substring containment on the
         normalised tokens and take the longest overlap.
         """
@@ -337,6 +362,30 @@ def cmd_scan(args):
     if not cfg.path and not cfg.roots:
         note("No configuration found. Run `cartographer init --root <dir>` first.")
         return 2
+    # `--only` is unsafe against an existing graph. Every extractor begins with
+    # store.clear_source(SOURCE), and that DELETE is scoped by extractor, not by
+    # repo -- so scanning one repo wipes e.g. every "symbols" node for all the
+    # others and re-adds just this one. The scan then reports success on a
+    # graph that quietly lost most of its content.
+    #
+    # A correct fix is not small: `nodes` has a repo column but `edges` and
+    # `gaps` do not, so scoped deletion needs an ownership rule for cross-repo
+    # edges and some attribution for gaps. Until that exists, refuse rather
+    # than silently truncate.
+    if args.only and os.path.exists(cfg.db_path()):
+        note("--only cannot safely refresh part of an existing graph: each "
+             "extractor clears its rows for ALL repos before re-adding, so "
+             "this would discard the repos you did not name.")
+        note("")
+        note("  full refresh (safe):        cartographer scan")
+        note("  faster, keeps git history:  cartographer scan --skip-history")
+        note("")
+        note("A full scan is mostly cache hits now -- unchanged files are not")
+        note("re-parsed -- so scoping by repo buys much less than it used to.")
+        note("  build a fresh partial graph: delete %s first, and accept that "
+             "it covers only the named repos" % cfg.db_path())
+        return 2
+
     triples = _repos_for(cfg, args.only)
     if not triples:
         note("No repositories resolved. Check `roots:` and `services:` in %s"
@@ -364,6 +413,8 @@ def cmd_scan(args):
     if not args.skip_sql:
         steps.append(("sqlschema", lambda: sqlschema.run(st, cfg, triples, note)))
     steps.append(("specs", lambda: specs.run(st, cfg, triples, note)))
+    # Must follow `specs`: it matches against the route nodes that step builds.
+    steps.append(("httpcalls", lambda: httpcalls.run(st, cfg, triples, note)))
     steps.append(("builddeps", lambda: builddeps.run(st, cfg, triples, note)))
     if not args.skip_secrets:
         steps.append(("secrets", lambda: secrets.run(st, cfg, triples, note)))
@@ -407,15 +458,50 @@ def cmd_scan(args):
     st.set_meta("scanned_at", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
     st.set_meta("version", __version__)
     st.set_meta("repos", json.dumps([t[0] for t in triples]))
+    # Build units and git repositories are different levels; both are needed.
+    # Recorded once here so every consumer can resolve one to the other
+    # without a column on 175k nodes.
+    st.set_meta("unit_to_git", json.dumps(cfgmod.unit_to_git_map(triples)))
     st.set_meta("stats", json.dumps(stats, default=str))
     st.commit()
 
     _write_reports(st, cfg)
+
+    # Snapshot the architectural surface before reporting, so every scan leaves
+    # something to compare the next one against. Written after the graph is
+    # committed and never allowed to fail the scan.
+    prev = archdiff.list_snapshots(cfg)
+    drift = None
+    snap = archdiff.snapshot(st)
+    if archdiff.write_snapshot(cfg, snap) and prev:
+        try:
+            drift = archdiff.diff(archdiff.load_snapshot(prev[-1]), snap)
+        except (OSError, ValueError):
+            drift = None
+
     c = st.counts()
     sec = st.conn.execute(
         "SELECT COUNT(*) n FROM gaps WHERE category='credential-in-source'"
     ).fetchone()["n"]
     note("")
+    if drift and drift.get("changed"):
+        bits = []
+        for label, key in (("service", "services_added"),
+                           ("route", "routes_added"),
+                           ("topic", "topics_added"),
+                           ("cross-service edge", "edges_added")):
+            n = len(drift.get(key) or [])
+            if n:
+                bits.append("%d new %s%s" % (n, label, "" if n == 1 else "s"))
+        multi = drift.get("became_multi_writer") or []
+        if multi:
+            bits.append("%d table%s gained a second writer"
+                        % (len(multi), "" if len(multi) == 1 else "s"))
+        if bits:
+            note("  architecture changed since the last scan: %s"
+                 % "; ".join(bits))
+            note("  see `cartographer diff`")
+            note("")
     if sec:
         note("  !! %d possible credential%s found in source. Values were NOT"
              % (sec, "" if sec == 1 else "s"))
@@ -785,13 +871,370 @@ def _print_table(st, n):
                                      r["evidence"] or ""))
 
 
+def _today():
+    return time.strftime("%Y-%m-%d")
+
+
+def _whoami():
+    for var in ("CARTOGRAPHER_USER", "GIT_AUTHOR_NAME", "USER", "USERNAME"):
+        v = os.environ.get(var)
+        if v:
+            return v
+    return "unknown"
+
+
+def cmd_gaps(args):
+    """Browse findings with their acknowledgement keys."""
+    cfg = cfgmod.load(args.config)
+    st = _open(cfg, create=False)
+    acks = ackmod.load(ackmod.ack_path(cfg))
+
+    sql = "SELECT category, detail, hint, source FROM gaps"
+    params = ()
+    if args.category:
+        sql += " WHERE category=?"
+        params = (args.category,)
+    sql += " ORDER BY category, id"
+    rows = list(st.conn.execute(sql, params))
+
+    visible, hidden = ackmod.split(
+        [(r["category"], r["detail"], r["hint"], r["source"]) for r in rows],
+        acks)
+    shown = rows if args.all else None
+
+    if not rows:
+        out("No gaps recorded. Run `cartographer scan` first.")
+        st.close()
+        return 0
+
+    out("Findings  (%d open%s)" % (
+        len(visible),
+        ", %d acknowledged" % len(hidden) if hidden else ""))
+    out("")
+    out("The 8-hex key is stable across scans. To accept one:")
+    out("  cartographer ack <key> --reason \"why it stays\"")
+    out("")
+
+    listing = [(c, d, h, so, True) for (c, d, h, so) in visible]
+    if args.all:
+        listing += [(c, d, h, so, False) for (c, d, h, so) in hidden]
+
+    last_cat = None
+    for cat, detail, hint, _src, is_open in listing:
+        if cat != last_cat:
+            out("")
+            out("%s" % cat)
+            last_cat = cat
+        mark = "  " if is_open else "  (acked) "
+        out("%s%s  %s" % (mark, ackmod.key_for(cat, detail), detail))
+        if args.hints and hint:
+            out("            %s" % hint)
+    out("")
+    if hidden and not args.all:
+        out("%d acknowledged finding(s) hidden. Use --all to include them."
+            % len(hidden))
+    st.close()
+    return 0
+
+
+def cmd_ack(args):
+    """Record, list or drop an acknowledgement."""
+    cfg = cfgmod.load(args.config)
+    path = ackmod.ack_path(cfg)
+    acks = ackmod.load(path)
+
+    if args.list:
+        if not acks:
+            out("Nothing acknowledged yet.")
+            out("")
+            out("Run `cartographer gaps` to see findings and their keys.")
+            return 0
+        out("Acknowledged findings  (%s)" % path)
+        out("")
+        for k in sorted(acks):
+            e = acks[k]
+            out("  %s  %s" % (k, e.get("reason") or "(no reason recorded)"))
+            meta = " ".join(x for x in (e.get("by"), e.get("date"),
+                                        e.get("category")) if x)
+            if meta:
+                out("            %s" % meta)
+        return 0
+
+    if args.remove:
+        gone = [k for k in args.remove if k in acks]
+        for k in gone:
+            del acks[k]
+        missing = [k for k in args.remove if k not in gone]
+        if gone:
+            ackmod.save(path, acks)
+            out("Removed %d acknowledgement(s): %s" % (len(gone), ", ".join(gone)))
+        for k in missing:
+            note("not acknowledged: %s" % k)
+        return 0 if gone else 1
+
+    if not args.key:
+        note("Give a key to acknowledge, or --list / --remove.")
+        note("Keys come from `cartographer gaps`.")
+        return 2
+    if not args.reason:
+        # An acknowledgement without a reason is indistinguishable from
+        # hiding something inconvenient, and useless to the next reader.
+        note("--reason is required: the point of the record is why it stays.")
+        return 2
+
+    st = _open(cfg, create=False)
+    found = None
+    for r in st.conn.execute("SELECT category, detail FROM gaps"):
+        if ackmod.key_for(r["category"], r["detail"]) == args.key:
+            found = (r["category"], r["detail"])
+            break
+    st.close()
+    if not found:
+        note("No current finding has key %s." % args.key)
+        note("It may have been fixed, or the detail changed. "
+             "Run `cartographer gaps` for current keys.")
+        return 1
+
+    acks[args.key] = {"category": found[0],
+                      "reason": args.reason,
+                      "by": args.by or _whoami(),
+                      "date": _today()}
+    ackmod.save(path, acks)
+    out("Acknowledged %s" % args.key)
+    out("  %s" % found[1])
+    out("")
+    out("Recorded in %s -- commit it so the team sees the reasoning." % path)
+    return 0
+
+
+def _fmt_list(label, items, limit=12):
+    if not items:
+        return
+    out("  %s (%d)" % (label, len(items)))
+    for x in items[:limit]:
+        out("      %s" % x)
+    if len(items) > limit:
+        out("      ... and %d more" % (len(items) - limit))
+    out("")
+
+
+def cmd_diff(args):
+    """What changed in the architecture between two scans."""
+    cfg = cfgmod.load(args.config)
+    snaps = archdiff.list_snapshots(cfg)
+    if len(snaps) < 2 and not (args.from_ and args.to):
+        out("Need two snapshots to compare; %d on disk." % len(snaps))
+        out("")
+        out("One is written by every `cartographer scan`, so run a scan now")
+        out("and again after your next pull.")
+        return 0
+
+    a = args.from_ or snaps[-2]
+    b = args.to or snaps[-1]
+    for p in (a, b):
+        if not os.path.exists(p):
+            note("no such snapshot: %s" % p)
+            return 2
+    d = archdiff.diff(archdiff.load_snapshot(a), archdiff.load_snapshot(b))
+
+    out("Architecture drift")
+    out("  from %s" % d["from"])
+    out("  to   %s" % d["to"])
+    out("")
+    if not d["changed"]:
+        out("No architectural change. Symbols may well have moved; services,")
+        out("routes, topics, tables and cross-service edges did not.")
+        return 0
+
+    # Writer changes lead: they are the ones with a data-integrity edge to them.
+    if d["became_multi_writer"]:
+        out("  A TABLE NOW HAS MULTIPLE WRITERS (%d)"
+            % len(d["became_multi_writer"]))
+        for name in d["became_multi_writer"][:12]:
+            out("      %s" % name)
+        out("      No documented owner for the write path. Worth resolving now,")
+        out("      while the change is fresh and someone remembers why.")
+        out("")
+    for label, rows in (("writers gained", d["writers_gained"]),
+                        ("writers lost", d["writers_lost"])):
+        if not rows:
+            continue
+        out("  %s (%d)" % (label, len(rows)))
+        for name, delta, now in rows[:12]:
+            out("      %-30s %s   (now: %s)"
+                % (name, ", ".join(delta), ", ".join(now) or "none"))
+        if len(rows) > 12:
+            out("      ... and %d more" % (len(rows) - 12))
+        out("")
+
+    _fmt_list("new cross-service edges", d["edges_added"])
+    _fmt_list("cross-service edges gone", d["edges_removed"])
+    _fmt_list("services added", d["services_added"])
+    _fmt_list("services removed", d["services_removed"])
+    _fmt_list("routes added", d["routes_added"])
+    _fmt_list("routes removed", d["routes_removed"])
+    _fmt_list("topics added", d["topics_added"])
+    _fmt_list("topics removed", d["topics_removed"])
+    _fmt_list("tables added", d["tables_added"])
+    _fmt_list("tables removed", d["tables_removed"])
+
+    out("A removed route or edge may simply be something the extractors can no")
+    out("longer see -- a renamed constant, a moved file. Check before treating")
+    out("it as deleted.")
+    return 0
+
+
+def cmd_snapshots(args):
+    cfg = cfgmod.load(args.config)
+    snaps = archdiff.list_snapshots(cfg)
+    if not snaps:
+        out("No snapshots yet. One is written by every `cartographer scan`.")
+        return 0
+    out("Snapshots (%d, newest last)" % len(snaps))
+    out("")
+    for p in snaps:
+        try:
+            s = archdiff.load_snapshot(p)
+            c = s.get("counts") or {}
+            out("  %s  services=%s routes=%s tables=%s edges=%s multi_writer=%s"
+                % (s.get("taken_at"), c.get("services"), c.get("routes"),
+                   c.get("tables"), c.get("service_edges"),
+                   c.get("multi_writer")))
+        except (OSError, ValueError):
+            out("  %s  (unreadable)" % os.path.basename(p))
+    out("")
+    out("Compare the last two:  cartographer diff")
+    return 0
+
+
+def cmd_audit(args):
+    """What the extractors missed, measured against the raw source."""
+    cfg = cfgmod.load(args.config)
+    st = _open(cfg, create=False)
+    triples = _repos_for(cfg, None)
+    note("Probing source (this reads files, not the graph)…")
+    results = auditmod.run(st, triples, args.check)
+
+    out("Extractor recall audit")
+    out("")
+    out("Each check probes the source with a pattern INDEPENDENT of the")
+    out("extractor, then compares. A shortfall is a question, not a verdict:")
+    out("some gaps are correct. Zero produced against a non-zero probe is not.")
+    out("")
+    worst = []
+    for r in results:
+        ratio = r["ratio"]
+        pct = "n/a" if ratio is None else "%.0f%%" % (100.0 * ratio)
+        flag = ""
+        if ratio is not None and r["probed"] >= 5:
+            if ratio == 0:
+                flag = "   <-- NOTHING CAPTURED"
+                worst.append(r)
+            elif ratio < 0.75:
+                flag = "   <-- worth a look"
+                worst.append(r)
+        out("  %-38s %6s   %d/%d %s%s"
+            % (r["name"], pct, r["produced"], r["probed"], r["unit"], flag))
+        if r["examples"]:
+            for ex in r["examples"]:
+                out("        - %s" % ex)
+        if args.verbose and r["note"]:
+            out("        %s" % r["note"])
+        out("")
+
+    if worst:
+        out("Look at these first:")
+        for r in worst:
+            out("  %s" % r["name"])
+            out("      %s" % r["note"])
+        out("")
+    out("Run with --verbose for the reasoning behind every check.")
+    st.close()
+    return 0
+
+
+def cmd_pr_check(args):
+    """Architectural context for a change set, for use while reviewing."""
+    cfg = cfgmod.load(args.config)
+    st = _open(cfg, create=False)
+    triples = _repos_for(cfg, None)
+    files = prcheck.changed_files(triples, args.range)
+    if not files:
+        out("No changed files found%s." %
+            (" for %s" % args.range if args.range else
+             " (tried the branch upstream, then origin/develop|main|master)"))
+        out("")
+        out("Pass an explicit range:  cartographer pr-check --range base..HEAD")
+        st.close()
+        return 0
+
+    r = prcheck.analyse(st, files)
+    out("Change set: %d file(s), %d in the graph" % (r["files"], r["matched"]))
+    if r["services"]:
+        out("  services touched: %s" % ", ".join(
+            "%s (%d)" % (k, v) for k, v in
+            sorted(r["services"].items(), key=lambda t: -t[1])))
+    out("")
+
+    if r["multi_writer"]:
+        # Honest framing: table access is recorded service -> table, with no
+        # file-level granularity, so this is the write surface of the services
+        # touched -- NOT a claim that this diff touches these tables.
+        out("  multiple-writer tables in the services you touched (%d)"
+            % len(r["multi_writer"]))
+        for tbl, w in r["multi_writer"][:12]:
+            out("      %-30s written by: %s" % (tbl, ", ".join(w)))
+        if len(r["multi_writer"]) > 12:
+            out("      ... and %d more" % (len(r["multi_writer"]) - 12))
+        out("      Table access is tracked per service, not per file, so this")
+        out("      is the service's write surface rather than this diff's.")
+        out("      Check whether the change goes anywhere near them.")
+        out("")
+
+    if r["routes"]:
+        out("  endpoints served by changed files (%d)" % len(r["routes"]))
+        for x in r["routes"][:12]:
+            out("      %s" % x)
+        if len(r["routes"]) > 12:
+            out("      ... and %d more" % (len(r["routes"]) - 12))
+        out("")
+    if r["callers"]:
+        out("  FRONTEND CALL SITES for those endpoints (%d)" % len(r["callers"]))
+        for x in r["callers"][:12]:
+            out("      %s" % x)
+        out("      Changing these paths or their responses is a contract change.")
+        out("")
+
+    if r["reviewers"]:
+        out("  suggested reviewers, by commits to these exact files")
+        for who, n in r["reviewers"]:
+            out("      %-28s %d commit(s)" % (who, n))
+        out("")
+
+    if r["unmatched"]:
+        out("  %d changed file(s) not in the graph (new, or a type not "
+            "extracted)" % len(r["unmatched"]))
+        for x in r["unmatched"][:8]:
+            out("      %s" % x)
+        if len(r["unmatched"]) > 8:
+            out("      ... and %d more" % (len(r["unmatched"]) - 8))
+        out("      Re-scan to include new files.")
+        out("")
+
+    out("Among the repos on this machine. A dependent may live in a repo that")
+    out("is not here, or be reached by reflection, DI or runtime config.")
+    st.close()
+    return 0
+
+
 def cmd_questions(args):
     cfg = cfgmod.load(args.config)
     st = _open(cfg, create=False)
+    acks = {} if args.all else ackmod.load(ackmod.ack_path(cfg))
     out("Questions worth asking your team")
     out("(these are the things the code could not tell me)")
     out("")
-    for q in md_report.suggest_questions(st):
+    for q in md_report.suggest_questions(st, acks):
         out("  - %s" % q)
     st.close()
     return 0
@@ -817,7 +1260,7 @@ def cmd_stats(args):
     c = st.counts()
     meta = st.all_meta()
     out("graph:      %s" % cfg.db_path())
-    out("built:      %s" % meta.get("scanned_at", "unknown"))
+    out("built:      %s" % fmt_when(meta.get("scanned_at", "unknown")))
     out("version:    %s" % meta.get("version", "?"))
     out("repos:      %s" % ", ".join(c["repos"]))
     out("services:   %s" % ", ".join(x for x in c["services"] if x))
@@ -900,7 +1343,7 @@ def cmd_doctor(args):
         st = Store(db)
         c = st.counts()
         out("graph        %d nodes, %d edges, built %s"
-            % (c["nodes"], c["edges"], st.get_meta("scanned_at", "?")))
+            % (c["nodes"], c["edges"], fmt_when(st.get_meta("scanned_at", "?"))))
         st.close()
     else:
         out("graph        not built yet -- run `cartographer scan`")
@@ -996,7 +1439,44 @@ def build_parser():
     s.add_argument("table", nargs="?", help="inspect one table")
     s.set_defaults(func=cmd_schema)
 
+    s = sub.add_parser("pr-check", help="architectural context for a change set")
+    s.add_argument("--range", help="git range, e.g. origin/develop..HEAD")
+    s.set_defaults(func=cmd_pr_check)
+
+    s = sub.add_parser("audit", help="what the extractors missed")
+    s.add_argument("--check", help="run only checks whose name contains this")
+    s.add_argument("--verbose", action="store_true",
+                   help="explain what each check means")
+    s.set_defaults(func=cmd_audit)
+
+    s = sub.add_parser("diff", help="what changed in the architecture")
+    s.add_argument("--from", dest="from_", help="older snapshot path")
+    s.add_argument("--to", help="newer snapshot path")
+    s.set_defaults(func=cmd_diff)
+
+    s = sub.add_parser("snapshots", help="list architecture snapshots")
+    s.set_defaults(func=cmd_snapshots)
+
+    s = sub.add_parser("gaps", help="browse findings and their ack keys")
+    s.add_argument("--category", help="limit to one gap category")
+    s.add_argument("--all", action="store_true",
+                   help="include acknowledged findings")
+    s.add_argument("--hints", action="store_true", help="show the hint text")
+    s.set_defaults(func=cmd_gaps)
+
+    s = sub.add_parser("ack", help="accept a finding, with a reason")
+    s.add_argument("key", nargs="?", help="8-hex key from `cartographer gaps`")
+    s.add_argument("--reason", help="why this finding stays (required)")
+    s.add_argument("--by", help="who accepted it (defaults to $USER)")
+    s.add_argument("--list", action="store_true",
+                   help="list what is already acknowledged")
+    s.add_argument("--remove", action="append",
+                   help="drop an acknowledgement by key")
+    s.set_defaults(func=cmd_ack)
+
     s = sub.add_parser("questions", help="what to ask your team")
+    s.add_argument("--all", action="store_true",
+                   help="include acknowledged findings")
     s.set_defaults(func=cmd_questions)
 
     s = sub.add_parser("report", help="regenerate reports from the graph")

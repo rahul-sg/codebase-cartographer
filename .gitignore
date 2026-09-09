@@ -1,12 +1,8 @@
-# Generated maps describe internal systems. Keep the tooling portable and the
-# output inside your work environment.
 .cartographer/
 cartographer.yaml
-docs/services/
-docs/flows/
-journal/
-
 __pycache__/
 *.pyc
+*.db
+*.sqlite
+*.sqlite3
 .DS_Store
-*.log

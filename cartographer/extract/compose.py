@@ -1,10 +1,11 @@
 """
 docker-compose as the local service/schema manifest.
 
-On ONG this file is the single clearest statement of which services run
-locally and which MySQL schema each one connects to, via `db_uri` env vars.
-It is also where the "one service, one schema" assumption breaks: `nexus` and
-`common` both point at `cmndev`, which a per-module reading would never reveal.
+On a large multi-service estate this file is the single clearest statement of
+which services run locally and which MySQL schema each one connects to, via
+`db_uri` env vars. It is also where the "one service, one schema" assumption
+breaks: `nexus` and `common` both point at `cmndev`, which a per-module
+reading would never reveal.
 
 Parsed with the mini-YAML reader, then walked structurally rather than by
 regex, so `environment:` in both list and mapping form works.
@@ -25,8 +26,29 @@ JDBC = re.compile(
 GENERIC_DSN = re.compile(
     r'\b(mongodb(?:\+srv)?|postgres(?:ql)?|mysql|redis|cassandra)://'
     r'(?:[^@\s/]+@)?([^/\s:]+)(?::(\d+))?(?:/([\w$]+))?', re.I)
+# Scheme-less DSNs — `db_uri: mysqldb:3306/cmnydev`. Common when the driver is
+# configured elsewhere and the env var carries only host:port/schema. A bare
+# `host:port/path` is far too generic to match on sight, so this is only
+# trusted when the env key itself names a database URI (DB_URI_KEY below).
+BARE_DSN = re.compile(r'^([A-Za-z0-9][A-Za-z0-9._-]*):(\d{2,5})/([\w$]+)$')
+DB_URI_KEY = re.compile(
+    r'(?:db|database|datasource|jdbc)[\w-]*(?:uri|url|dsn)'
+    r'|(?:uri|url|dsn)[\w-]*(?:db|database)', re.I)
+# The engine is absent from a scheme-less DSN; infer it from the host name
+# (`mysqldb` -> mysql) and stay honest with "unknown" when it is not evident.
+ENGINE_BY_HOST = (("mysql", "mysql"), ("mariadb", "mysql"),
+                  ("postgres", "postgres"), ("sqlserver", "mssql"),
+                  ("mssql", "mssql"), ("oracle", "oracle"))
+
+
+def _engine_from_host(host):
+    h = (host or "").lower()
+    for token, engine in ENGINE_BY_HOST:
+        if token in h:
+            return engine
+    return "unknown"
 # Substring, not word-boundary: real container names are `mysqldb`,
-# `ong_mysql_db`, `kafka-broker-1`. A \b anchor matches none of those.
+# `acme_mysql_db`, `kafka-broker-1`. A \b anchor matches none of those.
 INFRA_TOKENS = ("mysql", "mariadb", "postgres", "redis", "kafka", "zookeeper",
                 "elasticsearch", "opensearch", "rabbitmq", "mongo", "nginx",
                 "vault", "consul", "localstack", "minio", "memcached",
@@ -151,6 +173,18 @@ def run(store, cfg, repos, progress=None):
                         if schema:
                             _record(nodes, edges, schema_users, canon, engine,
                                     host, port, schema, ev, key, is_infra)
+                    # Scheme-less `host:port/schema`, only for db-URI keys and
+                    # only when no schemed DSN already matched, so a value like
+                    # `jdbc:mysql://h:3306/db` is never recorded twice.
+                    if (DB_URI_KEY.search(key)
+                            and not JDBC.search(val)
+                            and not GENERIC_DSN.search(val)):
+                        m = BARE_DSN.match(val.strip())
+                        if m:
+                            host, port, schema = m.groups()
+                            _record(nodes, edges, schema_users, canon,
+                                    _engine_from_host(host), host, port,
+                                    schema, ev, key, is_infra)
 
                 for dep in (body.get("depends_on") or []):
                     if isinstance(dep, dict):

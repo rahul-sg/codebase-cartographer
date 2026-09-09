@@ -206,7 +206,9 @@ class TestSymbolExtraction(unittest.TestCase):
         with open(p, "w") as fh:
             fh.write(src)
         try:
-            n, e, _ = symbols.parse_file(p, lang, "r", d, "s")
+            n, e, _, sup, imp = symbols.parse_file(p, lang, "r", d, "s")
+            self._last_imports = imp
+            self._last_pending = sup
             return {x["name"] for x in n if x["kind"] != "file"}, n, e
         finally:
             shutil.rmtree(d, ignore_errors=True)
@@ -254,13 +256,90 @@ class TestSymbolExtraction(unittest.TestCase):
         self.assertIn("get", names)
 
     def test_extends_excludes_keywords(self):
-        _, _, edges = self._parse("A.java", "java",
-                                  "public class A extends B implements C, D { }")
-        parents = {e["extra"]["parent"] for e in edges if e["kind"] == "extends"}
+        # parse_file defers supertypes rather than emitting edges: whether a
+        # parent is first-party or third-party is unknowable until the whole
+        # index exists. resolve_supertypes turns these into edges.
+        self._parse("A.java", "java",
+                    "public class A extends B implements C, D { }")
+        parents = {name for _src, name, _line in self._last_pending}
         self.assertEqual(parents, {"B", "C", "D"})
 
+    def test_supertype_resolves_to_first_party_type(self):
+        idx = {"Service": ["cart r java Svc.java`Service#"]}
+        edges, gaps = symbols.resolve_supertypes(
+            [("cart r java Impl.java`Impl#", "Service", 3, "Impl.java", "r")],
+            idx, {"cart r java Svc.java`Service#": "r"})
+        # Both directions: `extends` for the hierarchy, and the reciprocal
+        # `implemented-by` so directed traversal can reach the implementation.
+        by_kind = {e["kind"]: e for e in edges}
+        self.assertEqual(set(by_kind), {"extends", "implemented-by"})
+        self.assertEqual(by_kind["extends"]["src"], "cart r java Impl.java`Impl#")
+        self.assertEqual(by_kind["extends"]["dst"], "cart r java Svc.java`Service#")
+        self.assertEqual(by_kind["implemented-by"]["src"],
+                         "cart r java Svc.java`Service#")
+        self.assertEqual(by_kind["implemented-by"]["dst"],
+                         "cart r java Impl.java`Impl#")
+        self.assertTrue(by_kind["extends"]["extra"]["first_party"])
+        self.assertEqual(gaps, [])
+
+    def test_import_resolves_to_first_party_type_by_package(self):
+        # A fully-qualified import matches on PACKAGE PATH, not just the simple
+        # name, so a same-named type in another package is not picked.
+        idx = {"OrderService": [
+            "cart r java src/main/java/com/acme/agent/svc/OrderService.java`OrderService#",
+            "cart r java src/main/java/com/other/pkg/OrderService.java`OrderService#"]}
+        files = {
+            "cart r java src/main/java/com/acme/agent/svc/OrderService.java`OrderService#":
+                "src/main/java/com/acme/agent/svc/OrderService.java",
+            "cart r java src/main/java/com/other/pkg/OrderService.java`OrderService#":
+                "src/main/java/com/other/pkg/OrderService.java"}
+        edges = symbols.resolve_imports(
+            [("cart r java Ctl.java`", "com.acme.agent.svc.OrderService",
+              7, "Ctl.java", "r")], idx, files)
+        self.assertEqual(len(edges), 1)
+        self.assertIn("com/acme/agent/svc", edges[0]["dst"])
+        self.assertTrue(edges[0]["extra"]["first_party"])
+
+    def test_import_of_third_party_is_not_resolved(self):
+        edges = symbols.resolve_imports(
+            [("cart r java Ctl.java`", "java.util.List", 3, "Ctl.java", "r")],
+            {}, {})
+        self.assertEqual(edges, [])
+
+    def test_static_member_import_ignored(self):
+        # `import static com.x.Foo.bar` ends in a lowercase member, not a type.
+        edges = symbols.resolve_imports(
+            [("cart r java Ctl.java`", "com.x.Foo.bar", 3, "Ctl.java", "r")],
+            {"bar": ["whatever"]}, {"whatever": "x.java"})
+        self.assertEqual(edges, [])
+
+    def test_supertype_unknown_becomes_external_stub(self):
+        edges, gaps = symbols.resolve_supertypes(
+            [("cart r java Impl.java`Impl#", "RuntimeException", 3,
+              "Impl.java", "r")], {}, {})
+        # No reciprocal edge for a third-party parent: nothing here implements
+        # it, and the stub is not a node anybody traverses from.
+        self.assertEqual(len(edges), 1)
+        self.assertEqual(edges[0]["kind"], "extends")
+        self.assertFalse(edges[0]["extra"]["first_party"])
+        self.assertIn("external", edges[0]["dst"])
+
+    def test_ambiguous_supertype_recorded_as_gap(self):
+        idx = {"Service": ["cart a java A.java`Service#",
+                           "cart b java B.java`Service#"]}
+        by_repo = {"cart a java A.java`Service#": "a",
+                   "cart b java B.java`Service#": "b"}
+        edges, gaps = symbols.resolve_supertypes(
+            [("cart c java Impl.java`Impl#", "Service", 3, "Impl.java", "c")],
+            idx, by_repo)
+        # Falls back to an external stub rather than guessing which one.
+        self.assertFalse(edges[0]["extra"]["first_party"])
+        self.assertEqual(len(gaps), 1)
+        self.assertEqual(gaps[0][0], "ambiguous-supertype")
+
     def test_unreadable_file_returns_empty(self):
-        n, e, d = symbols.parse_file("/nonexistent/x.java", "java", "r", "/", "s")
+        n, e, d, sup, imp = symbols.parse_file(
+            "/nonexistent/x.java", "java", "r", "/", "s")
         self.assertEqual((n, e, d), ([], [], {}))
 
 
@@ -754,7 +833,7 @@ class TestEnterpriseShape(unittest.TestCase):
         from cartographer.extract import (maven, kafka, frontend, sqlschema,
                                           compose, secrets)
         tmp = tempfile.mkdtemp(prefix="cart-multi-")
-        root = os.path.join(tmp, "ong")
+        root = os.path.join(tmp, "estate")
         make_multiservice_fixture.build(root)
         cfg_path = os.path.join(tmp, "cartographer.yaml")
         with open(cfg_path, "w") as fh:
@@ -766,7 +845,7 @@ class TestEnterpriseShape(unittest.TestCase):
                     ("nexus", "[]"), ("agent", "[emailagentdev]"),
                     ("order-legacy", "[ome, legacyorders]"),
                     ("logistics", "[freight]"),
-                    ("interoperability", "[interop]"),
+                    ("gateway", "[gw]"),
                     ("contract", "[contracts]"), ("inventory", "[inv]"),
                     ("web-repo", "[omsnextgen]"),
                     ("portal-repo", "[portal]"),
@@ -808,7 +887,7 @@ class TestEnterpriseShape(unittest.TestCase):
             "SELECT name FROM nodes WHERE kind='library' AND extra LIKE '%artifactId%'")}
         svcs = {r["name"] for r in st.conn.execute(
             "SELECT name FROM nodes WHERE kind='service'")}
-        for lib in ("framework", "cache", "kafkautil", "gcutil", "auth", "misc"):
+        for lib in ("framework", "cache", "msglib", "corelib", "auth", "misc"):
             self.assertIn(lib, libs, "%s is a shared library, not a service" % lib)
         for svc in ("order", "catalog", "common", "agent"):
             self.assertIn(svc, svcs)
@@ -819,7 +898,7 @@ class TestEnterpriseShape(unittest.TestCase):
             "SELECT detail FROM gaps WHERE category IN "
             "('module-outside-reactor','module-standalone')"))
         self.assertIn("logistics", details)
-        self.assertIn("interoperability", details)
+        self.assertIn("gateway", details)
 
     def test_module_dependency_edges(self):
         st = _MULTI["st"]
@@ -1302,28 +1381,78 @@ class TestPackagedSetup(unittest.TestCase):
         import re
         # Assembled from fragments so this file does not match its own
         # pattern and report itself as an offender.
-        parts = ["itrade" + "network", "itn" + "-library", "ong" + "sqe",
-                 "iom" + "sqe", "itl" + "sqe", "icr" + "sqe", "iml" + "sqe",
-                 "rsen" + "gupta"]
+        #
+        # The original version of this guard checked only for the full company
+        # name, a library name, five host prefixes and one username -- and
+        # passed while real internal data sat in code COMMENTS and DOCSTRINGS:
+        # the short company abbreviation, the internal codename, the Java
+        # package root, real service and module names, the workspace path, and
+        # measured statistics about the real estate's size. A guard that only
+        # catches the obvious spellings gives false confidence, which is worse
+        # than no guard, because it is trusted before sharing.
+        parts = [
+            # full names and hosts
+            "itrade" + "network", "itn" + "-library",
+            # Split after the second letter, not the third: the standalone
+            # codename rule below would otherwise match this list itself.
+            "on" + "gsqe", "iom" + "sqe", "itl" + "sqe", "icr" + "sqe",
+            "iml" + "sqe", "rsen" + "gupta",
+            # package roots and abbreviations, bounded so ordinary words
+            # containing these letters do not match
+            r"\bcom\.i" + r"tn\b", r"\bi" + r"tn[-_/.]", r"[-_/]i" + r"tn\b",
+            # The codename appears lowercased inside compound identifiers
+            # (image names, hostnames, schema names) where \b does not help,
+            # because "_" is a word character. An earlier version of this
+            # guard was also case-SENSITIVE, and that combination is exactly
+            # how `o<codename>_mysql_db` survived a scrub and a review.
+            r"\bo" + r"ng\b", r"\bo" + r"ng[-_/]", r"[-_/]o" + r"ng\b",
+            # the workspace path and repo names
+            r"/projects/o" + r"ng\b",
+            r"\bo" + r"ng-(?:server|ui|devops)-repo\b",
+            r"\bom-angular-repo\b", r"\bbp-react-repo\b",
+            r"\bdatabase-scripts-repo\b",
+            # real module / service names used as examples
+            r"\border-enterprise\b", r"\binteroperability\b",
+            r"\bomsenterprise\b", r"\bkafkautil\b", r"\bgcutil\b",
+            r"\bApiConstant\b",
+        ]
+        # Case-insensitive: the codename and abbreviation appear in both
+        # cases across configs, image names and prose, and a case-sensitive
+        # guard silently passes half of them.
         bad = re.compile("|".join(parts), re.I)
         offenders = []
-        for sub in ("cartographer", "tests", "bin", "skills", "agents",
-                    "templates", "hooks"):
-            base = os.path.join(ROOT, sub)
+        # Root-level docs are shipped too. Leaving them unscanned is how the
+        # workspace path and the real node counts reached README and WORKFLOW.
+        roots = [os.path.join(ROOT, s) for s in
+                 ("cartographer", "tests", "bin", "skills", "agents",
+                  "templates", "hooks")]
+        # Every shippable root-level file, not just prose. The example config
+        # is the first thing a new user opens and it carried a real workspace
+        # path for exactly as long as this list said ".md" and ".txt" only --
+        # the third hole found in this guard, all of the same kind: the
+        # scanned SET was narrower than the shipped set.
+        loose = [os.path.join(ROOT, f) for f in os.listdir(ROOT)
+                 if f.endswith((".md", ".txt", ".yaml", ".yml", ".json",
+                                ".example", ".sh", ".cfg", ".toml")) and
+                 os.path.isfile(os.path.join(ROOT, f))]
+        for base in roots:
             for dirpath, dirnames, filenames in os.walk(base):
                 dirnames[:] = [d for d in dirnames if d != "__pycache__"]
                 for fn in filenames:
                     if fn.endswith((".pyc",)):
                         continue
-                    path = os.path.join(dirpath, fn)
-                    try:
-                        with open(path, "r", encoding="utf-8",
-                                  errors="ignore") as fh:
-                            if bad.search(fh.read()):
-                                offenders.append(os.path.relpath(path, ROOT))
-                    except OSError:
-                        pass
-        self.assertEqual(offenders, [], "organisation identifiers leaked")
+                    loose.append(os.path.join(dirpath, fn))
+        for path in loose:
+            try:
+                with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+                    hit = bad.search(fh.read())
+                if hit:
+                    offenders.append("%s (%s)" % (
+                        os.path.relpath(path, ROOT), hit.group(0)))
+            except OSError:
+                pass
+        self.assertEqual(sorted(offenders), [],
+                         "organisation identifiers leaked into shippable files")
 
 
 if __name__ == "__main__":

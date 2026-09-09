@@ -8,6 +8,8 @@ scarce skill.
 """
 from __future__ import annotations
 
+from .. import ack
+
 import json
 import re
 import time
@@ -309,20 +311,48 @@ def build(store, cfg, stats=None):
     return "\n".join(L)
 
 
-def suggest_questions(store):
+def _gaps(store, cats, acks, limit):
+    """
+    Gap details for one or more categories, minus anything acknowledged.
+
+    Filtering happens here rather than in SQL because an acknowledgement is
+    keyed on the finding's identity (category + location, line number
+    stripped), which SQL cannot compute. The limit is applied after filtering,
+    so acknowledging the top finding promotes the next one into view instead of
+    leaving a shorter list.
+    """
+    if isinstance(cats, str):
+        cats = [cats]
+    marks = ",".join("?" * len(cats))
+    rows = store.conn.execute(
+        "SELECT category, detail FROM gaps WHERE category IN (%s) "
+        "ORDER BY id" % marks, tuple(cats))
+    out = []
+    for r in rows:
+        if acks and ack.key_for(r["category"], r["detail"]) in acks:
+            continue
+        out.append(r)
+        if limit and len(out) >= limit:
+            break
+    return out
+
+
+def suggest_questions(store, acks=None):
     """
     Turn findings into questions. Specific questions make a new hire look
     sharp; vague ones make them look lost.
+
+    `acks` hides findings already recorded in `.cartographer-ack.yaml`. Counts
+    are left unfiltered on purpose: "108 credential-shaped strings" is a fact
+    about the codebase, and quietly shrinking it because some were reviewed
+    would misstate the scale.
     """
     qs = []
     # Ordered by how much a good answer is worth, not by category name.
-    for r in store.conn.execute(
-            "SELECT detail FROM gaps WHERE category='shared-table' LIMIT 4"):
+    for r in _gaps(store, "shared-table", acks, 4):
         qs.append("%s — who is allowed to WRITE that table, and is the other "
                   "service's access deliberate or historical?" % r["detail"])
-    for r in store.conn.execute(
-            "SELECT detail FROM gaps WHERE category IN "
-            "('module-outside-reactor','module-standalone') LIMIT 3"):
+    for r in _gaps(store, ['module-outside-reactor', 'module-standalone'], acks, 3):
         qs.append("%s — how is it actually built and deployed, and does CI "
                   "cover it?" % r["detail"])
     for r in store.conn.execute(
@@ -332,8 +362,7 @@ def suggest_questions(store):
                       "(see `cartographer secrets` for locations) — is there a "
                       "secrets manager I should be moving these to, and who "
                       "owns rotating them?" % r["n"])
-    for r in store.conn.execute(
-            "SELECT detail FROM gaps WHERE category='shared-schema' LIMIT 3"):
+    for r in _gaps(store, "shared-schema", acks, 3):
         qs.append("%s — is that intentional shared ownership, or a "
                   "copy-paste in the compose file?" % r["detail"])
     for r in store.conn.execute(
@@ -341,32 +370,25 @@ def suggest_questions(store):
         if r["n"]:
             qs.append("%d tables are queried but have no CREATE statement in "
                       "any repo I can see — where does that DDL live?" % r["n"])
-    for r in store.conn.execute(
-            "SELECT detail FROM gaps WHERE category='proxy-prefix-unmapped' LIMIT 3"):
+    for r in _gaps(store, "proxy-prefix-unmapped", acks, 3):
         qs.append("%s — what service is behind that prefix, and do I have "
                   "access to its repo?" % r["detail"])
-    for r in store.conn.execute(
-            "SELECT detail FROM gaps WHERE category='topic-constant-unreferenced' LIMIT 2"):
+    for r in _gaps(store, "topic-constant-unreferenced", acks, 2):
         qs.append("%s — is that event consumed by a service outside my "
                   "workspace, or is the constant dead?" % r["detail"])
-    for r in store.conn.execute(
-            "SELECT detail FROM gaps WHERE category='shared-library-version-drift' LIMIT 2"):
+    for r in _gaps(store, "shared-library-version-drift", acks, 2):
         qs.append("%s — is that drift deliberate, and does a fix in the library "
                   "need porting to both?" % r["detail"])
-    for r in store.conn.execute(
-            "SELECT detail FROM gaps WHERE category='jndi-datasource' LIMIT 2"):
+    for r in _gaps(store, "jndi-datasource", acks, 2):
         qs.append("%s — what host and schema does that JNDI name actually "
                   "resolve to in each environment?" % r["detail"])
-    for r in store.conn.execute(
-            "SELECT detail FROM gaps WHERE category='shared-datastore' LIMIT 3"):
+    for r in _gaps(store, "shared-datastore", acks, 3):
         qs.append("%s — which service is the source of truth for that schema, "
                   "and is the other one allowed to write to it?" % r["detail"])
-    for r in store.conn.execute(
-            "SELECT detail FROM gaps WHERE category='unconsumed-topic' LIMIT 3"):
+    for r in _gaps(store, "unconsumed-topic", acks, 3):
         qs.append("%s — is that consumer in a repo I don't have access to, or "
                   "is the event genuinely unused?" % r["detail"])
-    for r in store.conn.execute(
-            "SELECT detail FROM gaps WHERE category='trace-service-unmapped' LIMIT 3"):
+    for r in _gaps(store, "trace-service-unmapped", acks, 3):
         qs.append("%s — where does that service live and who owns it?" % r["detail"])
     for r in store.conn.execute(
             "SELECT a, b, shared FROM coupling WHERE cross_repo=1 "

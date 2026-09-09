@@ -1,7 +1,7 @@
 """
 Kafka topology where topic names are CONSTANTS, not string literals.
 
-On ONG, no service names a topic inline. Names are computed at runtime:
+On this estate, no service names a topic inline. Names are computed at runtime:
 
     topicNameCreator.createTopicName(KafkaConstants.KafkaTopicName.ORDER_SUBMITTED)
 
@@ -182,8 +182,9 @@ def run(store, cfg, repos, progress=None):
                     if in_listener:
                         consumes.setdefault(topic, {}).setdefault(owner, ev)
                     elif PRODUCE_HINT.search(line) or CREATE_TOPIC.search(line):
-                        # createTopicName inside a send is the ONG idiom; a bare
-                        # createTopicName call is still producer-side setup.
+                        # createTopicName inside a send is the idiom on this
+                        # estate; a bare createTopicName call is still
+                        # producer-side setup.
                         produces.setdefault(topic, {}).setdefault(owner, ev)
                     else:
                         mentions.setdefault(topic, {}).setdefault(owner, ev)

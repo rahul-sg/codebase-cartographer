@@ -1,9 +1,10 @@
 """
 Credential detection that never stores the credential.
 
-The stack reference calls for this explicitly, having found a hardcoded
-Confluent Cloud SASL credential in `agent/src/main/resources/application.properties`
-and deliberately not recording its value anywhere.
+Written this way because the first estate it was pointed at contained live
+broker credentials committed in a properties file. A scanner that records what
+it finds turns one hardcoded secret into two copies of it, the second sitting
+in a database that is easier to read and more widely shared than the source.
 
 This module follows the same rule structurally rather than by good intentions:
 the matched secret is never written to the graph, never returned, and never
@@ -99,13 +100,48 @@ def _walk(repo_root, follow=False, cap=2_000_000):
                 yield p
 
 
+def _stable_salt(cfg):
+    """
+    A salt that persists between scans, kept outside the repository.
+
+    A fresh random salt per run keeps values unrecoverable, but it also means
+    the same secret gets a new fingerprint every scan -- so a finding can never
+    be acknowledged, compared, or tracked, and the list can only ever be read
+    from scratch. Persisting the salt in the graph directory (machine-local and
+    gitignored, never committed) keeps fingerprints meaningless to anyone who
+    does not already have the file, while making them stable here.
+    """
+    try:
+        base = os.path.dirname(cfg.db_path())
+        os.makedirs(base, exist_ok=True)
+        p = os.path.join(base, "secrets.salt")
+        if os.path.exists(p):
+            with open(p, "r", encoding="utf-8") as fh:
+                got = fh.read().strip()
+                if got:
+                    return got
+        val = _pysecrets.token_hex(16)
+        with open(p, "w", encoding="utf-8") as fh:
+            fh.write(val)
+        try:
+            os.chmod(p, 0o600)
+        except OSError:
+            pass
+        return val
+    except OSError:
+        # Unwritable graph dir: fall back to per-run randomness. Fingerprints
+        # stop being comparable, which is worse than stable but better than
+        # failing the scan.
+        return _pysecrets.token_hex(16)
+
+
 def run(store, cfg, repos, progress=None):
     """
     Records findings as gaps only. No node, no edge, and above all no value
     ever enters the graph.
     """
     store.conn.execute("DELETE FROM gaps WHERE source=?", (SOURCE,))
-    salt = _pysecrets.token_hex(16)
+    salt = _stable_salt(cfg)
     follow = cfg.defaults.get("follow_symlinks", False)
     findings = []
     seen = set()

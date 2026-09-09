@@ -21,6 +21,8 @@ import re
 import subprocess
 from collections import defaultdict
 
+from ..config import unit_to_git_map
+
 SOURCE = "history"
 
 TICKET = re.compile(r"\b([A-Z][A-Z0-9]{1,9}-\d{1,6})\b")
@@ -177,6 +179,12 @@ def analyse_repo(repo_root, repo_name, months, max_files_per_commit):
 
 
 def run(store, cfg, repos, progress=None):
+    # A pair of files is only genuinely CROSS-REPO when the two build
+    # units live in different git repositories. Treating every module as a
+    # repo marks coupling inside one checkout as cross-repo and inflates
+    # the figure by orders of magnitude.
+    _gmap = unit_to_git_map(repos)
+
     months = int(cfg.defaults.get("history_months", 12))
     max_fpc = int(cfg.defaults.get("max_commit_files", 40))
     min_shared = int(cfg.defaults.get("min_coupling_shared", 3))
@@ -291,8 +299,9 @@ def run(store, cfg, repos, progress=None):
         va = repo_revs.get((ra, pa), shared)
         vb = repo_revs.get((rb, pb), shared)
         degree = shared / max(1.0, (va + vb) / 2.0)
+        xr = 1 if _gmap.get(ra, ra) != _gmap.get(rb, rb) else 0
         crows.append(("%s/%s" % (ra, pa), "%s/%s" % (rb, pb), ra, rb,
-                      shared, va, vb, round(min(degree, 1.0), 4), 1))
+                      shared, va, vb, round(min(degree, 1.0), 4), xr))
     for (ka, kb), shared in cross_weak.items():
         if ((ka, kb)) in cross or shared < max(3, min_shared):
             continue
@@ -301,8 +310,9 @@ def run(store, cfg, repos, progress=None):
         va = repo_revs.get((ra, pa), shared)
         vb = repo_revs.get((rb, pb), shared)
         degree = 0.5 * shared / max(1.0, (va + vb) / 2.0)
+        xr = 1 if _gmap.get(ra, ra) != _gmap.get(rb, rb) else 0
         crows.append(("%s/%s" % (ra, pa), "%s/%s" % (rb, pb), ra, rb,
-                      shared, va, vb, round(min(degree, 1.0), 4), 1))
+                      shared, va, vb, round(min(degree, 1.0), 4), xr))
     if crows:
         store.conn.executemany(
             "INSERT OR REPLACE INTO coupling(a,b,a_repo,b_repo,shared,a_revs,"
@@ -329,7 +339,9 @@ def run(store, cfg, repos, progress=None):
                       SOURCE)
     store.commit()
 
-    n_cross = sum(1 for r in crows) if crows else 0
+    # Only pairs actually flagged cross_repo=1 count; the rest are cross-module
+    # inside a single checkout, which is a different and far less notable thing.
+    n_cross = sum(1 for r in crows if r[-1]) if crows else 0
     n_files = store.conn.execute("SELECT COUNT(*) n FROM file_metrics").fetchone()["n"]
     n_coup = store.conn.execute("SELECT COUNT(*) n FROM coupling").fetchone()["n"]
     n_months = store.conn.execute(
