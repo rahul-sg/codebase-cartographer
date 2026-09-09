@@ -839,10 +839,10 @@ class TestEnterpriseShape(unittest.TestCase):
         with open(cfg_path, "w") as fh:
             fh.write("roots:\n  - %s\n\nservices:\n" % root)
             for name, al in (
-                    ("order", "[ord, orddev]"), ("catalog", "[ctlg, ctlgdev]"),
-                    ("common", "[cmn, cmndev]"), ("company", "[cmny, cmnydev]"),
+                    ("order", "[ord, salesdev]"), ("catalog", "[ctlg, prodsdev]"),
+                    ("common", "[cmn, coredev]"), ("company", "[cmny, orgdev]"),
                     ("comment", "[cmt]"), ("notification", "[notif]"),
-                    ("nexus", "[]"), ("agent", "[emailagentdev]"),
+                    ("nexus", "[]"), ("agent", "[mailerdev]"),
                     ("order-legacy", "[ome, legacyorders]"),
                     ("logistics", "[freight]"),
                     ("gateway", "[gw]"),
@@ -1019,7 +1019,7 @@ class TestEnterpriseShape(unittest.TestCase):
         st = _MULTI["st"]
         d = " ".join(r["detail"] for r in st.conn.execute(
             "SELECT detail FROM gaps WHERE category='shared-schema'"))
-        self.assertIn("cmndev", d)
+        self.assertIn("coredev", d)
         self.assertIn("common", d)
         self.assertIn("nexus", d)
 

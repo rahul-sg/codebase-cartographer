@@ -73,15 +73,15 @@ def build(root):
     libs = {"corelib": (), "cache": (), "msglib": (), "auth": ("cache",),
             "framework": ("cache", "corelib"), "misc": ("msglib",)}
     services = {
-        "common":           ("cmndev", ("auth", "framework", "cache", "msglib", "corelib", "misc")),
-        "company":          ("cmnydev", ("framework", "cache", "msglib", "misc")),
-        "order":            ("orddev", ("framework", "cache", "msglib", "common")),
-        "catalog":          ("ctlgdev", ("framework", "cache", "msglib")),
-        "comment":          ("cmtdev", ("framework", "cache")),
-        "notification":     ("notifdev", ("framework", "msglib")),
-        "nexus":            ("cmndev", ("framework", "cache")),   # shares common's schema
-        "agent":            ("emailagentdev", ("framework", "cache")),
-        "order-legacy": ("omedev", ("framework", "msglib")),
+        "common":           ("coredev", ("auth", "framework", "cache", "msglib", "corelib", "misc")),
+        "company":          ("orgdev", ("framework", "cache", "msglib", "misc")),
+        "order":            ("salesdev", ("framework", "cache", "msglib", "common")),
+        "catalog":          ("prodsdev", ("framework", "cache", "msglib")),
+        "comment":          ("notesdev", ("framework", "cache")),
+        "notification":     ("alertsdev", ("framework", "msglib")),
+        "nexus":            ("coredev", ("framework", "cache")),   # shares common's schema
+        "agent":            ("mailerdev", ("framework", "cache")),
+        "order-legacy": ("legacydev", ("framework", "msglib")),
     }
     outside = {"logistics": "logdev", "gateway": "gatewaydev"}
 
@@ -295,7 +295,7 @@ public class OrderProductDaoImpl {
     # ---------------- properties incl. a credential-shaped value -----------
     w(srv + "/agent/src/main/resources/application.properties",
       """spring.application.name=agent
-db_uri=jdbc:mysql://mysqlLocal3307:3306/emailagentdev
+db_uri=jdbc:mysql://mysqlLocal3307:3306/mailerdev
 oracle.enable=false
 redis.cache.enable=true
 kafka.bootstrap.servers=pkc-abcde.us-central1.gcp.confluent.cloud:9092
@@ -303,7 +303,7 @@ kafka.sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule r
 openai.api.key=sk-proj-NOTAREALKEYbutShapedLikeOne1234567890
 """)
     w(srv + "/order/src/main/resources/application.properties",
-      "spring.application.name=order\ndb_uri=jdbc:mysql://mysqldb:3306/orddev\n"
+      "spring.application.name=order\ndb_uri=jdbc:mysql://mysqldb:3306/salesdev\n"
       "oracle.enable=true\noracle.jndi=java:/jdbc/tpcom\n")
 
     # ---------------- devops ----------------------------------------------
@@ -320,25 +320,25 @@ services:
   common:
     image: gcr.io/dev-sqe-uat/common
     environment:
-      - db_uri=jdbc:mysql://mysqldb:3306/cmndev
+      - db_uri=jdbc:mysql://mysqldb:3306/coredev
       - db_username=root
   nexus:
     image: gcr.io/dev-sqe-uat/nexus
     environment:
-      - db_uri=jdbc:mysql://mysqldb:3306/cmndev
+      - db_uri=jdbc:mysql://mysqldb:3306/coredev
   order:
     image: gcr.io/dev-sqe-uat/order
     environment:
-      - db_uri=jdbc:mysql://mysqldb:3306/orddev
+      - db_uri=jdbc:mysql://mysqldb:3306/salesdev
     depends_on: [mysqldb, kafka, common]
   catalog:
     image: gcr.io/dev-sqe-uat/catalog
     environment:
-      - db_uri=jdbc:mysql://mysqldb:3306/ctlgdev
+      - db_uri=jdbc:mysql://mysqldb:3306/prodsdev
   ome:
     image: gcr.io/dev-sqe-uat/order-legacy
     environment:
-      - db_uri=jdbc:mysql://mysqldb:3306/omedev
+      - db_uri=jdbc:mysql://mysqldb:3306/legacydev
 """)
 
     # ---------------- frontends -------------------------------------------

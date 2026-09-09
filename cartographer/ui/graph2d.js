@@ -476,8 +476,8 @@
   };
 
   /* Long identifiers are unreadable at graph scale and collide with their
-   * neighbours. Datastores are the worst offender: `mysql://mysqldb/orddev`
-   * says far less than `orddev` in a picture where the host is the same
+   * neighbours. Datastores are the worst offender: `mysql://mysqldb/salesdev`
+   * says far less than `salesdev` in a picture where the host is the same
    * everywhere. The full value stays in the tooltip and the detail panel. */
   function shortLabel(n) {
     var s = String(n.label || "");

@@ -4,7 +4,7 @@ docker-compose as the local service/schema manifest.
 On a large multi-service estate this file is the single clearest statement of
 which services run locally and which MySQL schema each one connects to, via
 `db_uri` env vars. It is also where the "one service, one schema" assumption
-breaks: `nexus` and `common` both point at `cmndev`, which a per-module
+breaks: `nexus` and `common` both point at `coredev`, which a per-module
 reading would never reveal.
 
 Parsed with the mini-YAML reader, then walked structurally rather than by
@@ -26,7 +26,7 @@ JDBC = re.compile(
 GENERIC_DSN = re.compile(
     r'\b(mongodb(?:\+srv)?|postgres(?:ql)?|mysql|redis|cassandra)://'
     r'(?:[^@\s/]+@)?([^/\s:]+)(?::(\d+))?(?:/([\w$]+))?', re.I)
-# Scheme-less DSNs — `db_uri: mysqldb:3306/cmnydev`. Common when the driver is
+# Scheme-less DSNs — `db_uri: mysqldb:3306/orgdev`. Common when the driver is
 # configured elsewhere and the env var carries only host:port/schema. A bare
 # `host:port/path` is far too generic to match on sight, so this is only
 # trusted when the env key itself names a database URI (DB_URI_KEY below).

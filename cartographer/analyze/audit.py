@@ -11,7 +11,7 @@ Two real bugs on this codebase were caught by luck rather than by the tool:
     unreadable, so ~87% of controllers recorded their methods at the wrong
     path -- and the test suite stayed green because its fixture used a plain
     string literal
-  * scheme-less DSNs (`db_uri: mysqldb:3306/cmnydev`) matched neither DSN
+  * scheme-less DSNs (`db_uri: mysqldb:3306/orgdev`) matched neither DSN
     pattern, so compose-derived schema detection would have found zero schemas
 
 Both were recall failures, and both were invisible in the output.
