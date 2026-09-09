@@ -1455,5 +1455,82 @@ class TestPackagedSetup(unittest.TestCase):
                          "organisation identifiers leaked into shippable files")
 
 
+class TestArtefactGuard(unittest.TestCase):
+    """
+    The artefact rule is expressed in three places -- the pre-commit hook, the
+    share script, and CI. That is two more than is safe, and the one that
+    drifted was the regex in CI: unanchored, it matched
+    `cartographer.yaml.example`, a file we ship deliberately, and failed a
+    green build.
+
+    These tests run the CI pattern against real paths so a drift fails here,
+    locally and in seconds, instead of on a push.
+    """
+
+    @staticmethod
+    def _ci_pattern():
+        """Read the live pattern out of the workflow rather than restating it."""
+        import re
+        wf = os.path.join(ROOT, ".github", "workflows", "ci.yml")
+        with open(wf) as fh:
+            text = fh.read()
+        m = re.search(r"git ls-files \| grep -E '([^']+)'", text)
+        assert m, "could not find the artefact pattern in ci.yml"
+        return re.compile(m.group(1))
+
+    def test_blocks_real_artefacts(self):
+        pat = self._ci_pattern()
+        for path in (".cartographer/graph.db", "graph.db", "a/b/graph.sqlite3",
+                     "graph.sqlite", "cartographer.yaml", "svc/cartographer.yaml",
+                     "x/__pycache__/mod.pyc", "mod.pyc",
+                     "sub/.cartographer/graph.json"):
+            self.assertTrue(pat.search(path), "should be blocked: %s" % path)
+
+    def test_allows_what_we_ship(self):
+        pat = self._ci_pattern()
+        for path in ("cartographer.yaml.example", "README.md",
+                     "cartographer/store.py", "cartographer/ui/app.js",
+                     "docs/database-design.md", "tests/fixtures/sample.dbml",
+                     "examples/config.yaml.template"):
+            self.assertFalse(pat.search(path),
+                             "false positive, would fail CI on a clean tree: %s"
+                             % path)
+
+    def test_the_tracked_tree_is_clean(self):
+        """The exact check CI runs, against the real file list."""
+        import subprocess
+        pat = self._ci_pattern()
+        out = subprocess.run(["git", "ls-files"], cwd=ROOT,
+                             capture_output=True, text=True)
+        if out.returncode != 0:
+            self.skipTest("not a git checkout")
+        offenders = [f for f in out.stdout.split("\n") if f and pat.search(f)]
+        self.assertEqual(offenders, [], "scan artefacts are tracked by git")
+
+    def test_hook_and_ci_agree(self):
+        """
+        The hook uses shell globs and CI uses a regex. They must reach the same
+        verdict, or one of them is lying about what is safe to commit.
+        """
+        import subprocess
+        hook = os.path.join(ROOT, "scripts", "hooks", "pre-commit")
+        if not os.path.isfile(hook):
+            self.skipTest("hook not present")
+        pat = self._ci_pattern()
+        with open(hook) as fh:
+            hook_src = fh.read()
+        # Spot-check the cases where the two notations diverge most easily.
+        for path, expected in ((".cartographer/graph.db", True),
+                               ("cartographer.yaml", True),
+                               ("cartographer.yaml.example", False)):
+            ci_says = bool(pat.search(path))
+            self.assertEqual(ci_says, expected,
+                             "CI disagrees on %s" % path)
+            if expected:
+                base = os.path.basename(path)
+                self.assertTrue(base in hook_src or "*.db" in hook_src,
+                                "hook has no rule covering %s" % path)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2 if "-v" in sys.argv else 1)

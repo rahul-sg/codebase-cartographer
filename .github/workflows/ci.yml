@@ -32,7 +32,12 @@ jobs:
       # matching would not necessarily flag.
       - name: No scan artefacts in the tree
         run: |
-          found=$(git ls-files | grep -E '(\.db|\.sqlite3?|^cartographer\.yaml|/cartographer\.yaml|\.pyc|__pycache__/|(^|/)\.cartographer/)' || true)
+          # Anchored at the end, deliberately: without $ the pattern
+          # '^cartographer\.yaml' also matches cartographer.yaml.example, which
+          # is a file we ship on purpose. The hook and the share script express
+          # this same rule with exact-match globs; this is the only place it is
+          # a regex, and it is the only place it drifted.
+          found=$(git ls-files | grep -E '(\.db$|\.sqlite3?$|(^|/)cartographer\.yaml$|\.pyc$|__pycache__/|(^|/)\.cartographer/)' || true)
           if [ -n "$found" ]; then
             echo "Scan artefacts are tracked by git:"; echo "$found"; exit 1
           fi
